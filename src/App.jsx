@@ -3,15 +3,8 @@ import {
   supabase,
   loadAllUserData,
   migrateLocalStorageToSupabase,
-  syncItems,
-  syncContactos,
-  syncEventos,
-  upsertSettings,
-  appendMessage,
   subscribeUserData,
   unsubscribeUserData,
-  enqueueItems,
-  enqueueContactos,
   flushSyncQueue,
 } from "./lib/supabase.js";
 import AuthScreen from "./components/AuthScreen.jsx";
@@ -4191,6 +4184,7 @@ export default function CerebralApp() {
   const [session, setSession]     = useState(null);
   const [authReady, setAuthReady] = useState(false);
   const [syncing, setSyncing]     = useState(false);
+  const [syncFailed, setSyncFailed] = useState(false);
   const [vista, setVista] = useState("inicio");
   const [searchQuery, setSearchQuery] = useState("");
   const [darkMode, setDarkMode] = useState(() => localStorage.getItem("cerebro_dark") === "true");
@@ -4313,6 +4307,8 @@ export default function CerebralApp() {
 
   // ── Supabase — carga inicial y migración ─────────────────────────────────
   async function initUserData(userId) {
+    if (initInProgressRef.current) return;
+    initInProgressRef.current = true;
     setSyncing(true);
     try {
       await migrateLocalStorageToSupabase(userId);
@@ -4347,7 +4343,9 @@ export default function CerebralApp() {
       flushSyncQueue(userId).catch(() => {});
     } catch (err) {
       console.error("[CerebralApp] initUserData error:", err);
+      setSyncFailed(true);
     } finally {
+      initInProgressRef.current = false;
       setSyncing(false);
     }
   }
@@ -4434,6 +4432,7 @@ export default function CerebralApp() {
   const [simulatingStep, setSimulatingStep] = useState(1); // 1: method, 2: email, 3: scopes, 4: success
   const historyRef = useRef([]);
   const realtimeChannelRef = useRef(null);
+  const initInProgressRef = useRef(false);
 
   // Persistir configuración de personalidad en localStorage
   useEffect(() => {
@@ -4783,6 +4782,20 @@ export default function CerebralApp() {
   if (!authReady) return null;
   if (!session)   return <AuthScreen onAuth={setSession} darkMode={darkMode} />;
   if (syncing)    return <SyncingScreen darkMode={darkMode} />;
+  if (syncFailed) return (
+    <div style={{ minHeight: "100vh", background: darkMode ? "#0f0f14" : "#f0f0f5", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16, fontFamily: "-apple-system, sans-serif" }}>
+      <div style={{ fontSize: 15, fontWeight: 700, color: darkMode ? "#f5f5f7" : "#1d1d1f" }}>Error al cargar datos</div>
+      <div style={{ fontSize: 13, color: darkMode ? "#aeaeb2" : "#515154" }}>No se pudo sincronizar con Supabase.</div>
+      <button onClick={() => { setSyncFailed(false); if (session?.user?.id) initUserData(session.user.id); }}
+        style={{ padding: "9px 20px", borderRadius: 10, background: "#0071e3", color: "#fff", border: "none", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+        Reintentar
+      </button>
+      <button onClick={async () => { await supabase.auth.signOut(); }}
+        style={{ padding: "7px 16px", borderRadius: 10, background: "transparent", color: darkMode ? "#aeaeb2" : "#515154", border: `1px solid ${darkMode ? "rgba(255,255,255,0.10)" : "rgba(0,0,0,0.10)"}`, fontSize: 12, cursor: "pointer" }}>
+        Cerrar sesión
+      </button>
+    </div>
+  );
 
   return (
     <>
