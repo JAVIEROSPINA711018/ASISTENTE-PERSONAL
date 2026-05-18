@@ -18,6 +18,7 @@ export default function AuthScreen({ onAuth, darkMode }) {
   const [loading, setLoading]   = useState(false);
   const [error, setError]       = useState(null);
   const [success, setSuccess]   = useState(null);
+  const [focusedField, setFocusedField] = useState(null);
 
   const labelStyle = {
     fontSize: 11, fontWeight: 600, color: textSub,
@@ -36,6 +37,12 @@ export default function AuthScreen({ onAuth, darkMode }) {
     setError(null);
     setSuccess(null);
     setLoading(true);
+
+    if (mode === "registro" && !nombre.trim()) {
+      setError("El nombre es requerido para registrarse.");
+      setLoading(false);
+      return;
+    }
 
     try {
       if (mode === "login") {
@@ -106,7 +113,7 @@ export default function AuthScreen({ onAuth, darkMode }) {
           {/* Toggle login/registro */}
           <div style={{ display: "flex", gap: 4, marginBottom: 24, background: darkMode ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.04)", borderRadius: 10, padding: 3 }}>
             {["login", "registro"].map(m => (
-              <button key={m} onClick={() => { setMode(m); setError(null); setSuccess(null); }}
+              <button key={m} onClick={() => { setMode(m); setError(null); setSuccess(null); setNombre(""); setPassword(""); }}
                 style={{
                   flex: 1, padding: "7px 0", borderRadius: 8, border: "none", cursor: "pointer",
                   fontSize: 13, fontWeight: mode === m ? 700 : 400,
@@ -130,9 +137,9 @@ export default function AuthScreen({ onAuth, darkMode }) {
                   type="text" value={nombre}
                   onChange={e => setNombre(e.target.value)}
                   placeholder="Tu nombre"
-                  style={inputStyle}
-                  onFocus={e => e.target.style.border = `1px solid ${accent}`}
-                  onBlur={e => e.target.style.border = `1px solid ${border}`}
+                  style={{ ...inputStyle, border: `1px solid ${focusedField === "nombre" ? accent : border}` }}
+                  onFocus={() => setFocusedField("nombre")}
+                  onBlur={() => setFocusedField(null)}
                 />
               </div>
             )}
@@ -144,9 +151,9 @@ export default function AuthScreen({ onAuth, darkMode }) {
                 type="email" value={email} required
                 onChange={e => setEmail(e.target.value)}
                 placeholder="tu@email.com"
-                style={inputStyle}
-                onFocus={e => e.target.style.border = `1px solid ${accent}`}
-                onBlur={e => e.target.style.border = `1px solid ${border}`}
+                style={{ ...inputStyle, border: `1px solid ${focusedField === "email" ? accent : border}` }}
+                onFocus={() => setFocusedField("email")}
+                onBlur={() => setFocusedField(null)}
               />
             </div>
 
@@ -159,9 +166,9 @@ export default function AuthScreen({ onAuth, darkMode }) {
                   value={password} required minLength={6}
                   onChange={e => setPassword(e.target.value)}
                   placeholder="••••••••"
-                  style={{ ...inputStyle, paddingRight: 44 }}
-                  onFocus={e => e.target.style.border = `1px solid ${accent}`}
-                  onBlur={e => e.target.style.border = `1px solid ${border}`}
+                  style={{ ...inputStyle, paddingRight: 44, border: `1px solid ${focusedField === "password" ? accent : border}` }}
+                  onFocus={() => setFocusedField("password")}
+                  onBlur={() => setFocusedField(null)}
                 />
                 <button type="button" onClick={() => setShowPass(!showPass)}
                   style={{
