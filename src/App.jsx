@@ -57,7 +57,8 @@ function SyncingScreen({ darkMode }) {
         <div style={{ fontSize: 12, color: sub }}>Sincronizando con Supabase</div>
       </div>
       <div style={{ width: 200, height: 3, background: darkMode ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)", borderRadius: 4, overflow: "hidden" }}>
-        <div style={{ width: "60%", height: "100%", background: "#0071e3", borderRadius: 4, animation: "pulse 1.4s ease-in-out infinite" }} />
+        <style>{`@keyframes sp-pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }`}</style>
+        <div style={{ width: "60%", height: "100%", background: "#0071e3", borderRadius: 4, animation: "sp-pulse 1.4s ease-in-out infinite" }} />
       </div>
     </div>
   );
