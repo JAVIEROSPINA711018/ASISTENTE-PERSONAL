@@ -14,6 +14,7 @@ export const supabase = createClient(
 
 // ── Carga inicial (todo en paralelo) ─────────────────────────────────────────
 export async function loadAllUserData(userId) {
+  if (!userId) throw new Error("[supabase] userId is required");
   const [
     { data: items,     error: e1 },
     { data: contactos, error: e2 },
@@ -45,6 +46,7 @@ export async function loadAllUserData(userId) {
 
 // ── Items ─────────────────────────────────────────────────────────────────────
 export async function syncItems(items, userId) {
+  if (!userId) throw new Error("[supabase] userId is required");
   if (!items.length) return;
   const rows = items.map(item => ({ ...item, user_id: userId }));
   const { error } = await supabase.from("items").upsert(rows, { onConflict: "id" });
@@ -62,6 +64,7 @@ export async function deleteItem(id, userId) {
 
 // ── Contactos ─────────────────────────────────────────────────────────────────
 export async function syncContactos(contactos, userId) {
+  if (!userId) throw new Error("[supabase] userId is required");
   if (!contactos.length) return;
   const rows = contactos.map(c => ({ ...c, user_id: userId }));
   const { error } = await supabase.from("contactos").upsert(rows, { onConflict: "id" });
@@ -79,6 +82,7 @@ export async function deleteContacto(id, userId) {
 
 // ── Eventos ───────────────────────────────────────────────────────────────────
 export async function syncEventos(eventos, userId) {
+  if (!userId) throw new Error("[supabase] userId is required");
   if (!eventos.length) return;
   const rows = eventos.map(e => ({ ...e, user_id: userId }));
   const { error } = await supabase.from("eventos").upsert(rows, { onConflict: "id" });
@@ -96,6 +100,7 @@ export async function deleteEvento(id, userId) {
 
 // ── Settings ──────────────────────────────────────────────────────────────────
 export async function loadSettings(userId) {
+  if (!userId) throw new Error("[supabase] userId is required");
   const { data, error } = await supabase
     .from("settings")
     .select("*")
@@ -107,6 +112,7 @@ export async function loadSettings(userId) {
 }
 
 export async function upsertSettings(patch, userId) {
+  if (!userId) throw new Error("[supabase] userId is required");
   const { error } = await supabase
     .from("settings")
     .upsert({ ...patch, user_id: userId }, { onConflict: "user_id" });
@@ -115,6 +121,7 @@ export async function upsertSettings(patch, userId) {
 
 // ── Messages ──────────────────────────────────────────────────────────────────
 export async function appendMessage({ role, content }, userId) {
+  if (!userId) throw new Error("[supabase] userId is required");
   const { error } = await supabase.from("messages").insert({
     user_id: userId,
     role,
@@ -124,6 +131,7 @@ export async function appendMessage({ role, content }, userId) {
 }
 
 export async function bulkInsertMessages(messages, userId) {
+  if (!userId) throw new Error("[supabase] userId is required");
   if (!messages.length) return;
   const rows = messages.map(m => ({
     user_id: userId,
@@ -162,16 +170,29 @@ export async function migrateLocalStorageToSupabase(userId) {
     gemini_api_key: null, // nunca migrar la API key desde localStorage por seguridad
   };
 
-  await Promise.all([
-    items.length     ? syncItems(items, userId)               : null,
-    contactos.length ? syncContactos(contactos, userId)       : null,
-    eventos.length   ? syncEventos(eventos, userId)           : null,
-    messages.length  ? bulkInsertMessages(messages, userId)   : null,
-    upsertSettings(settings, userId),
-  ].filter(Boolean));
+  try {
+    await Promise.all([
+      items.length     ? syncItems(items, userId)               : null,
+      contactos.length ? syncContactos(contactos, userId)       : null,
+      eventos.length   ? syncEventos(eventos, userId)           : null,
+      upsertSettings(settings, userId),
+    ].filter(Boolean));
 
-  localStorage.setItem(migKey, "1");
-  console.info("[supabase] Migración completada para userId:", userId);
+    // Messages use INSERT (not upsert) — migrate separately with deduplication guard
+    if (messages.length) {
+      const msgKey = `cerebro_messages_migrated_${userId}`;
+      if (!localStorage.getItem(msgKey)) {
+        await bulkInsertMessages(messages, userId);
+        localStorage.setItem(msgKey, "1");
+      }
+    }
+
+    localStorage.setItem(migKey, "1");
+    console.info("[supabase] Migración completada para userId:", userId);
+  } catch (err) {
+    console.error("[supabase] Migración parcialmente fallida, se reintentará:", err.message);
+    // Do NOT set migKey — will retry on next login
+  }
 }
 
 // ── Cola offline ──────────────────────────────────────────────────────────────
@@ -195,27 +216,34 @@ export function enqueueContactos(contactos, userId) {
 }
 
 // Procesar cola pendiente al recuperar conexión
+let _flushing = false;
+
 export async function flushSyncQueue(userId) {
+  if (_flushing) return;
+  _flushing = true;
   const raw = localStorage.getItem("cerebro_sync_queue");
-  if (!raw) return;
+  if (!raw) { _flushing = false; return; }
   let queue;
-  try { queue = JSON.parse(raw); } catch { return; }
-  if (!queue.length) return;
+  try { queue = JSON.parse(raw); } catch { _flushing = false; return; }
+  if (!queue.length) { _flushing = false; return; }
 
   const remaining = [];
-  for (const op of queue) {
-    try {
-      if (op.table === "items"     && op.operation === "upsert") await syncItems(op.payload.items, userId);
-      if (op.table === "contactos" && op.operation === "upsert") await syncContactos(op.payload.contactos, userId);
-    } catch {
-      remaining.push(op); // reencolar si sigue fallando
+  try {
+    for (const op of queue) {
+      try {
+        if (op.table === "items"     && op.operation === "upsert") await syncItems(op.payload.items, userId);
+        if (op.table === "contactos" && op.operation === "upsert") await syncContactos(op.payload.contactos, userId);
+      } catch {
+        remaining.push(op);
+      }
     }
-  }
-
-  if (remaining.length) {
-    localStorage.setItem("cerebro_sync_queue", JSON.stringify(remaining));
-  } else {
-    localStorage.removeItem("cerebro_sync_queue");
+    if (remaining.length) {
+      localStorage.setItem("cerebro_sync_queue", JSON.stringify(remaining));
+    } else {
+      localStorage.removeItem("cerebro_sync_queue");
+    }
+  } finally {
+    _flushing = false;
   }
 }
 
@@ -229,11 +257,12 @@ export function subscribeUserData(userId, handlers) {
       { event: "*", schema: "public", table: "items", filter: `user_id=eq.${userId}` },
       async () => {
         // Al recibir cualquier cambio en items, recargar la lista completa
-        const { data } = await supabase
+        const { data, error } = await supabase
           .from("items")
           .select("*")
           .eq("user_id", userId)
           .order("creado", { ascending: false });
+        if (error) console.error("[supabase] realtime refetch items:", error.message);
         if (data && handlers.onItemsChange) handlers.onItemsChange(data);
       }
     )
@@ -241,11 +270,12 @@ export function subscribeUserData(userId, handlers) {
       "postgres_changes",
       { event: "*", schema: "public", table: "contactos", filter: `user_id=eq.${userId}` },
       async () => {
-        const { data } = await supabase
+        const { data, error } = await supabase
           .from("contactos")
           .select("*")
           .eq("user_id", userId)
           .order("nombre");
+        if (error) console.error("[supabase] realtime refetch contactos:", error.message);
         if (data && handlers.onContactosChange) handlers.onContactosChange(data);
       }
     )
