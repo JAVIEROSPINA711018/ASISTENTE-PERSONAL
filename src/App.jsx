@@ -3882,6 +3882,7 @@ function GeneralConfigModal({
                 onClick={() => {
                   localStorage.setItem("gemini_api_key", tempKey.trim());
                   setApiKey(tempKey.trim());
+                  if (tempKey.trim()) handleUpsertSettings({ gemini_api_key: tempKey.trim() });
                   onClose();
                 }}
                 style={{
@@ -4846,7 +4847,24 @@ export default function CerebralApp() {
     <>
       <style>{css}</style>
       <div className={`workspace-container${darkMode ? " dark" : ""}`}>
-        
+        {/* Toast de sincronización en segundo plano */}
+        {syncing && (
+          <div style={{
+            position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)",
+            background: darkMode ? "#1a1a24" : "#ffffff",
+            border: `1px solid ${G.border}`,
+            borderRadius: 12, padding: "10px 18px",
+            display: "flex", alignItems: "center", gap: 9,
+            boxShadow: "0 8px 30px rgba(0,0,0,0.18)",
+            zIndex: 9999, fontSize: 13, color: G.textSecondary,
+            fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif",
+            whiteSpace: "nowrap",
+          }}>
+            <div style={{ width: 14, height: 14, borderRadius: "50%", border: `2px solid ${G.accent}`, borderTopColor: "transparent", animation: "spin 0.7s linear infinite", flexShrink: 0 }} />
+            Sincronizando tus datos...
+          </div>
+        )}
+
         {/* MENÚ LATERAL PERMANENTE — Tema Oscuro */}
         <aside className={`sidebar-permanent ${isMobileSidebarOpen ? "open" : ""}`}>
 
@@ -5608,6 +5626,7 @@ export default function CerebralApp() {
                       onClick={() => {
                         localStorage.setItem("gemini_api_key", tempKey.trim());
                         setApiKey(tempKey.trim());
+                        if (tempKey.trim()) handleUpsertSettings({ gemini_api_key: tempKey.trim() });
                         setShowConfig(false);
                       }}
                       style={{
