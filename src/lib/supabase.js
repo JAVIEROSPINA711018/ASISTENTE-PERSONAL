@@ -26,14 +26,14 @@ export async function loadAllUserData(userId) {
     supabase.from("contactos").select("*").eq("user_id", userId).order("nombre"),
     supabase.from("eventos").select("*").eq("user_id", userId).order("fecha"),
     supabase.from("messages").select("*").eq("user_id", userId).order("created_at").limit(100),
-    supabase.from("settings").select("*").eq("user_id", userId).single(),
+    supabase.from("settings").select("*").eq("user_id", userId).maybeSingle(),
   ]);
 
   if (e1) console.error("[supabase] loadItems:", e1.message);
   if (e2) console.error("[supabase] loadContactos:", e2.message);
   if (e3) console.error("[supabase] loadEventos:", e3.message);
   if (e4) console.error("[supabase] loadMessages:", e4.message);
-  if (e5 && e5.code !== "PGRST116") console.error("[supabase] loadSettings:", e5.message);
+  if (e5) console.error("[supabase] loadSettings:", e5.message);
 
   return {
     items:     items     || [],
@@ -105,9 +105,8 @@ export async function loadSettings(userId) {
     .from("settings")
     .select("*")
     .eq("user_id", userId)
-    .single();
-  // PGRST116 = no row found, expected the first time
-  if (error && error.code !== "PGRST116") throw error;
+    .maybeSingle();
+  if (error) throw error;
   return data || null;
 }
 
@@ -231,8 +230,8 @@ export async function flushSyncQueue(userId) {
   try {
     for (const op of queue) {
       try {
-        if (op.table === "items"     && op.operation === "upsert") await syncItems(op.payload.items, userId);
-        if (op.table === "contactos" && op.operation === "upsert") await syncContactos(op.payload.contactos, userId);
+        if (op.table === "items"     && op.operation === "upsert") await syncItems(op.payload.items, op.payload.userId || userId);
+        if (op.table === "contactos" && op.operation === "upsert") await syncContactos(op.payload.contactos, op.payload.userId || userId);
       } catch {
         remaining.push(op);
       }

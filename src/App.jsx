@@ -4263,6 +4263,23 @@ export default function CerebralApp() {
       }
       if (!s) {
         setSyncing(false);
+        setSyncFailed(false);
+        // Clear all user data from state to prevent data leakage on shared devices
+        setItems([]);
+        setContactos([]);
+        setMessages([]);
+        setMood("🎯 Enfocado");
+        setDiario("");
+        setApiKey("");
+        // Clear localStorage keys that belong to the signed-out user
+        localStorage.removeItem("cerebro_items");
+        localStorage.removeItem("cerebro_contactos");
+        localStorage.removeItem("cerebro_messages");
+        localStorage.removeItem("cerebro_mood");
+        localStorage.removeItem("cerebro_diario");
+        localStorage.removeItem("cerebro_habits");
+        localStorage.removeItem("cerebro_sync_queue");
+        localStorage.removeItem("gemini_api_key");
         if (realtimeChannelRef.current) {
           unsubscribeUserData(realtimeChannelRef.current);
           realtimeChannelRef.current = null;
@@ -4291,12 +4308,14 @@ export default function CerebralApp() {
   // Efectos de persistencia para estados de Brite
   useEffect(() => {
     localStorage.setItem("cerebro_mood", mood);
-    handleUpsertSettings({ mood });
+    const t = setTimeout(() => handleUpsertSettings({ mood }), 400);
+    return () => clearTimeout(t);
   }, [mood]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     localStorage.setItem("cerebro_diario", diario);
-    handleUpsertSettings({ diario });
+    const t = setTimeout(() => handleUpsertSettings({ diario }), 800);
+    return () => clearTimeout(t);
   }, [diario]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
