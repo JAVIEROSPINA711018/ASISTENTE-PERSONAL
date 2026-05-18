@@ -1,5 +1,19 @@
 import { useState, useEffect, useRef } from "react";
-import { supabase } from "./lib/supabase.js";
+import {
+  supabase,
+  loadAllUserData,
+  migrateLocalStorageToSupabase,
+  syncItems,
+  syncContactos,
+  syncEventos,
+  upsertSettings,
+  appendMessage,
+  subscribeUserData,
+  unsubscribeUserData,
+  enqueueItems,
+  enqueueContactos,
+  flushSyncQueue,
+} from "./lib/supabase.js";
 import AuthScreen from "./components/AuthScreen.jsx";
 import ViewDashboard from "./views/ViewDashboard.jsx";
 import FinanceLedger from "./views/ViewFinanzas.jsx";
@@ -4239,21 +4253,38 @@ export default function CerebralApp() {
     supabase.auth.getSession().then(({ data }) => {
       setSession(data.session);
       setAuthReady(true);
+      if (data.session) initUserData(data.session.user.id);
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, s) => {
       setSession(s);
-      if (!s) setSyncing(false);
+      if (s && (event === "SIGNED_IN" || event === "TOKEN_REFRESHED")) {
+        initUserData(s.user.id);
+      }
+      if (!s) {
+        setSyncing(false);
+        if (realtimeChannelRef.current) {
+          unsubscribeUserData(realtimeChannelRef.current);
+          realtimeChannelRef.current = null;
+        }
+      }
     });
 
     const handleOnline = () => {
-      // flushSyncQueue will be wired up in Task 6
+      supabase.auth.getSession().then(({ data }) => {
+        if (data.session?.user?.id) {
+          flushSyncQueue(data.session.user.id).catch(() => {});
+        }
+      });
     };
     window.addEventListener("online", handleOnline);
 
     return () => {
       subscription.unsubscribe();
       window.removeEventListener("online", handleOnline);
+      if (realtimeChannelRef.current) {
+        unsubscribeUserData(realtimeChannelRef.current);
+      }
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -4279,6 +4310,47 @@ export default function CerebralApp() {
   useEffect(() => {
     localStorage.setItem("cerebro_contactos", JSON.stringify(contactos));
   }, [contactos]);
+
+  // ── Supabase — carga inicial y migración ─────────────────────────────────
+  async function initUserData(userId) {
+    setSyncing(true);
+    try {
+      await migrateLocalStorageToSupabase(userId);
+      const data = await loadAllUserData(userId);
+
+      if (data.items.length)     setItems(data.items);
+      if (data.contactos.length) setContactos(data.contactos);
+      if (data.messages.length)  setMessages(data.messages);
+
+      if (data.settings) {
+        if (data.settings.dark_mode !== undefined) setDarkMode(data.settings.dark_mode);
+        if (data.settings.mood)         setMood(data.settings.mood);
+        if (data.settings.diario)       setDiario(data.settings.diario);
+        if (data.settings.habits)       setHabits(data.settings.habits);
+        if (data.settings.personality)  setPersonality(data.settings.personality);
+        if (data.settings.google_email) {
+          setGoogleConnectedEmail(data.settings.google_email);
+          setGoogleConnected(true);
+        }
+        if (data.settings.gemini_api_key) {
+          setApiKey(data.settings.gemini_api_key);
+          localStorage.setItem("gemini_api_key", data.settings.gemini_api_key);
+        }
+      }
+
+      if (realtimeChannelRef.current) unsubscribeUserData(realtimeChannelRef.current);
+      realtimeChannelRef.current = subscribeUserData(userId, {
+        onItemsChange:     (newItems)     => setItems(newItems),
+        onContactosChange: (newContactos) => setContactos(newContactos),
+      });
+
+      flushSyncQueue(userId).catch(() => {});
+    } catch (err) {
+      console.error("[CerebralApp] initUserData error:", err);
+    } finally {
+      setSyncing(false);
+    }
+  }
 
   const handleIncrementHabit = (id) => {
     setHabits(prev => prev.map(h => {
@@ -4361,6 +4433,7 @@ export default function CerebralApp() {
   const [simulatingConnection, setSimulatingConnection] = useState(null); // 'google' | 'outlook' | null
   const [simulatingStep, setSimulatingStep] = useState(1); // 1: method, 2: email, 3: scopes, 4: success
   const historyRef = useRef([]);
+  const realtimeChannelRef = useRef(null);
 
   // Persistir configuración de personalidad en localStorage
   useEffect(() => {
@@ -5633,6 +5706,25 @@ export default function CerebralApp() {
                   <ContactosPanel />
                 </div>
               )}
+
+              {/* Cerrar sesión */}
+              <div style={{ borderTop: `1px solid ${G.border}`, paddingTop: 16, marginTop: 8 }}>
+                <button
+                  onClick={async () => { await supabase.auth.signOut(); }}
+                  style={{
+                    width: "100%", padding: "9px 0", borderRadius: 10,
+                    background: G.coralSoft, border: `1px solid rgba(255,59,48,0.20)`,
+                    color: G.coral, fontSize: 13, fontWeight: 600, cursor: "pointer",
+                  }}
+                >
+                  Cerrar sesión
+                </button>
+                {session?.user?.email && (
+                  <div style={{ textAlign: "center", fontSize: 11, color: G.textTertiary, marginTop: 8 }}>
+                    {session.user.email}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         )}
