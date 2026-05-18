@@ -3,6 +3,11 @@ import {
   supabase,
   loadAllUserData,
   migrateLocalStorageToSupabase,
+  syncItems,
+  syncContactos,
+  upsertSettings,
+  enqueueItems,
+  enqueueContactos,
   subscribeUserData,
   unsubscribeUserData,
   flushSyncQueue,
@@ -3155,7 +3160,7 @@ function RightDrawer({
           )}
 
           {type === "task_detail" && data && (
-            <TaskDetailEditor item={data} items={items} setItems={setItems} onDelete={onDelete} onClose={onClose} />
+            <TaskDetailEditor item={data} items={items} setItems={handleSetItems} onDelete={onDelete} onClose={onClose} />
           )}
 
           {type === "calendar_detail" && (
@@ -3169,7 +3174,7 @@ function RightDrawer({
           )}
 
           {type === "finance_detail" && (
-            <FinanceLedger items={items} setItems={setItems} onDelete={onDelete} />
+            <FinanceLedger items={items} setItems={handleSetItems} onDelete={onDelete} />
           )}
         </div>
       </div>
@@ -4285,15 +4290,18 @@ export default function CerebralApp() {
   // Efectos de persistencia para estados de Brite
   useEffect(() => {
     localStorage.setItem("cerebro_mood", mood);
-  }, [mood]);
+    handleUpsertSettings({ mood });
+  }, [mood]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     localStorage.setItem("cerebro_diario", diario);
-  }, [diario]);
+    handleUpsertSettings({ diario });
+  }, [diario]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     localStorage.setItem("cerebro_habits", JSON.stringify(habits));
-  }, [habits]);
+    handleUpsertSettings({ habits });
+  }, [habits]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [contactos, setContactos] = useState(() => {
     try {
@@ -4347,6 +4355,42 @@ export default function CerebralApp() {
     } finally {
       initInProgressRef.current = false;
       setSyncing(false);
+    }
+  }
+
+  // ── Mutation wrappers optimistas ──────────────────────────────────────────
+  // Actualiza state inmediatamente (UI sin lag) y sincroniza con Supabase en background.
+  function handleSetItems(updaterOrValue) {
+    setItems(prev => {
+      const next = typeof updaterOrValue === "function" ? updaterOrValue(prev) : updaterOrValue;
+      localStorage.setItem("cerebro_items", JSON.stringify(next));
+      if (session?.user?.id) {
+        syncItems(next, session.user.id).catch(() => {
+          enqueueItems(next, session.user.id);
+        });
+      }
+      return next;
+    });
+  }
+
+  function handleSetContactos(updaterOrValue) {
+    setContactos(prev => {
+      const next = typeof updaterOrValue === "function" ? updaterOrValue(prev) : updaterOrValue;
+      localStorage.setItem("cerebro_contactos", JSON.stringify(next));
+      if (session?.user?.id) {
+        syncContactos(next, session.user.id).catch(() => {
+          enqueueContactos(next, session.user.id);
+        });
+      }
+      return next;
+    });
+  }
+
+  function handleUpsertSettings(patch) {
+    if (session?.user?.id) {
+      upsertSettings(patch, session.user.id).catch(err =>
+        console.error("[supabase] upsertSettings failed:", err.message)
+      );
     }
   }
 
@@ -4437,7 +4481,8 @@ export default function CerebralApp() {
   // Persistir configuración de personalidad en localStorage
   useEffect(() => {
     localStorage.setItem("cerebro_personality", personality);
-  }, [personality]);
+    handleUpsertSettings({ personality });
+  }, [personality]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Persistir conexiones de cuentas en localStorage
   useEffect(() => {
@@ -4975,7 +5020,7 @@ export default function CerebralApp() {
 
               {/* Toggle Dark/Light Mode */}
               <button
-                onClick={() => { const next = !darkMode; setDarkMode(next); localStorage.setItem("cerebro_dark", next); }}
+                onClick={() => { const next = !darkMode; setDarkMode(next); localStorage.setItem("cerebro_dark", next); handleUpsertSettings({ dark_mode: next }); }}
                 title={darkMode ? "Cambiar a modo claro" : "Cambiar a modo oscuro"}
                 style={{ width: 34, height: 34, borderRadius: 9,
                   background: darkMode ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.04)",
@@ -5027,7 +5072,7 @@ export default function CerebralApp() {
               <div style={{ flex: 1, overflow: "hidden", display: "flex" }}>
                 <ViewTareas
                   items={items}
-                  setItems={setItems}
+                  setItems={handleSetItems}
                   onDelete={handleDelete}
                   onOpenDrawer={handleOpenDrawer}
                   darkMode={darkMode}
@@ -5036,24 +5081,24 @@ export default function CerebralApp() {
             )}
             {vista === "notas" && (
               <div style={{ flex: 1, overflow: "hidden", display: "flex" }}>
-                <ViewNotas items={items} setItems={setItems} darkMode={darkMode} />
+                <ViewNotas items={items} setItems={handleSetItems} darkMode={darkMode} />
               </div>
             )}
             {vista === "calendario" && (
               <div style={{ flex: 1, overflow: "hidden", display: "flex" }}>
-                <ViewCalendario items={items} setItems={setItems} darkMode={darkMode} />
+                <ViewCalendario items={items} setItems={handleSetItems} darkMode={darkMode} />
               </div>
             )}
             {vista === "reuniones" && (
               <div style={{ flex: 1, overflow: "hidden", display: "flex" }}>
-                <ViewReuniones items={items} setItems={setItems} apiKey={apiKey} darkMode={darkMode} />
+                <ViewReuniones items={items} setItems={handleSetItems} apiKey={apiKey} darkMode={darkMode} />
               </div>
             )}
             {vista === "finanzas" && (
               <div style={{ flex: 1, overflowY: "auto", padding: "24px 24px 40px", background: darkMode ? DARK.bg : LIGHT.bg }}>
                 <FinanceLedger
                   items={items}
-                  setItems={setItems}
+                  setItems={handleSetItems}
                   onDelete={handleDelete}
                   darkMode={darkMode}
                 />
@@ -5061,7 +5106,7 @@ export default function CerebralApp() {
             )}
             {vista === "contactos" && (
               <div style={{ flex: 1, overflowY: "auto", padding: "24px 24px 40px", background: darkMode ? DARK.bg : LIGHT.bg }}>
-                <ViewContactos contactos={contactos} setContactos={setContactos} darkMode={darkMode} />
+                <ViewContactos contactos={contactos} setContactos={handleSetContactos} darkMode={darkMode} />
               </div>
             )}
             {vista === "correos" && (
@@ -5756,7 +5801,7 @@ export default function CerebralApp() {
           data={drawerData}
           onClose={handleCloseDrawer}
           items={items}
-          setItems={setItems}
+          setItems={handleSetItems}
           onDelete={handleDelete}
           onCaptura={handleCaptura}
           messages={messages}
