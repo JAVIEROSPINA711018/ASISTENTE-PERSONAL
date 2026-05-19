@@ -6,6 +6,7 @@ import {
   syncItems,
   syncContactos,
   upsertSettings,
+  appendMessage,
   enqueueItems,
   enqueueContactos,
   subscribeUserData,
@@ -4345,6 +4346,8 @@ export default function CerebralApp() {
       if (data.items.length)     setItems(data.items);
       if (data.contactos.length) setContactos(data.contactos);
       if (data.messages.length)  setMessages(data.messages);
+      // Nota: data.eventos existe en Supabase pero el calendario usa items con fecha.
+      // La tabla eventos está disponible para extensiones futuras.
 
       if (data.settings) {
         if (data.settings.dark_mode !== undefined) setDarkMode(data.settings.dark_mode);
@@ -4366,6 +4369,18 @@ export default function CerebralApp() {
       realtimeChannelRef.current = subscribeUserData(userId, {
         onItemsChange:     (newItems)     => setItems(newItems),
         onContactosChange: (newContactos) => setContactos(newContactos),
+        onSettingsChange:  (s) => {
+          if (s.dark_mode    !== undefined) setDarkMode(s.dark_mode);
+          if (s.mood)         setMood(s.mood);
+          if (s.diario)       setDiario(s.diario);
+          if (s.habits)       setHabits(s.habits);
+          if (s.personality)  setPersonality(s.personality);
+          if (s.google_email) { setGoogleConnectedEmail(s.google_email); setGoogleConnected(true); }
+          if (s.gemini_api_key) {
+            setApiKey(s.gemini_api_key);
+            localStorage.setItem("gemini_api_key", s.gemini_api_key);
+          }
+        },
       });
 
       flushSyncQueue(userId).catch(() => {});
@@ -4536,6 +4551,7 @@ export default function CerebralApp() {
     setMessages(prev => [...prev, {
       role: "assistant", content: texto, tipo: "chat", time: new Date().toISOString()
     }]);
+    if (session?.user?.id) appendMessage({ role: "assistant", content: texto }, session.user.id).catch(() => {});
   }
 
   // Revisar recordatorios individuales de tareas
@@ -4726,6 +4742,7 @@ export default function CerebralApp() {
   async function handleCaptura(texto) {
     const userMsg = { role: "user", content: texto, time: now() };
     setMessages(prev => [...prev, userMsg]);
+    if (session?.user?.id) appendMessage({ role: "user", content: texto }, session.user.id).catch(() => {});
     historyRef.current = [...historyRef.current, { role: "user", content: texto }];
     setIsLoading(true);
 
@@ -4746,6 +4763,7 @@ export default function CerebralApp() {
         accion: primerItem?.accion?.tipo && primerItem.accion.tipo !== "null" ? primerItem.accion : null,
       };
       setMessages(prev => [...prev, assistantMsg]);
+      if (session?.user?.id) appendMessage({ role: "assistant", content: assistantContent }, session.user.id).catch(() => {});
       historyRef.current = [...historyRef.current, { role: "assistant", content: assistantContent }];
 
       // Si el Asistente ordena eliminar el ítem original (reprogramación con "mover")

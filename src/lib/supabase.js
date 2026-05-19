@@ -247,7 +247,7 @@ export async function flushSyncQueue(userId) {
 }
 
 // ── Realtime subscriptions ────────────────────────────────────────────────────
-// handlers: { onItemsChange(items), onContactosChange(contactos) }
+// handlers: { onItemsChange(items), onContactosChange(contactos), onSettingsChange(settings) }
 export function subscribeUserData(userId, handlers) {
   const channel = supabase
     .channel(`user-data-${userId}`)
@@ -276,6 +276,18 @@ export function subscribeUserData(userId, handlers) {
           .order("nombre");
         if (error) console.error("[supabase] realtime refetch contactos:", error.message);
         if (data && handlers.onContactosChange) handlers.onContactosChange(data);
+      }
+    )
+    .on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "settings", filter: `user_id=eq.${userId}` },
+      async () => {
+        const { data } = await supabase
+          .from("settings")
+          .select("*")
+          .eq("user_id", userId)
+          .maybeSingle();
+        if (data && handlers.onSettingsChange) handlers.onSettingsChange(data);
       }
     )
     .subscribe();
