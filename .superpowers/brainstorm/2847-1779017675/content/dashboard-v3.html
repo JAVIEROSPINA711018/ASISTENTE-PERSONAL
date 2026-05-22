@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cerebro Personal — Dashboard v3 Mockup</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Inter', -apple-system, sans-serif; background: #f0f0f5; min-height: 100vh; padding: 24px; }
+
+.label-top { font-size: 13px; font-weight: 600; color: #515154; margin-bottom: 12px; }
+.label-top span { color: #0071e3; }
+
+/* APP SHELL */
+.app { display: flex; height: 720px; border-radius: 16px; overflow: hidden; box-shadow: 0 8px 40px rgba(0,0,0,0.12); max-width: 1200px; margin: 0 auto; border: 1px solid rgba(0,0,0,0.07); }
+
+/* SIDEBAR */
+.sidebar {
+  width: 220px; min-width: 220px;
+  background: white;
+  border-right: 1px solid rgba(0,0,0,0.08);
+  display: flex; flex-direction: column;
+  padding: 0;
+}
+.sidebar-logo {
+  padding: 20px 16px 16px;
+  border-bottom: 1px solid rgba(0,0,0,0.06);
+  display: flex; align-items: center; gap: 10px;
+}
+.logo-mark {
+  width: 32px; height: 32px; border-radius: 8px;
+  background: linear-gradient(135deg, #0071e3, #5e5ce6);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px; font-weight: 800; color: white;
+}
+.logo-text { font-size: 13px; font-weight: 700; color: #1d1d1f; line-height: 1.2; }
+.logo-sub { font-size: 10px; color: #86868b; font-weight: 400; }
+
+.nav-section { padding: 16px 8px 8px; }
+.nav-label { font-size: 9px; font-weight: 700; color: #aeaeb2; text-transform: uppercase; letter-spacing: 0.08em; padding: 0 8px; margin-bottom: 6px; }
+.nav-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 10px; border-radius: 8px;
+  font-size: 12.5px; font-weight: 500; color: #515154;
+  margin-bottom: 1px; cursor: pointer;
+}
+.nav-item:hover { background: #f5f5f7; color: #1d1d1f; }
+.nav-item.active { background: rgba(0,113,227,0.08); color: #0071e3; font-weight: 600; }
+.nav-icon { font-size: 15px; width: 20px; text-align: center; }
+.nav-badge {
+  margin-left: auto; background: #ff3b30; color: white;
+  border-radius: 10px; font-size: 10px; font-weight: 700;
+  padding: 1px 6px;
+}
+.nav-badge.amber { background: #ff9500; }
+
+.sidebar-footer {
+  margin-top: auto; padding: 12px 8px 16px;
+  border-top: 1px solid rgba(0,0,0,0.06);
+}
+.user-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; }
+.user-avatar {
+  width: 28px; height: 28px; border-radius: 50%;
+  background: linear-gradient(135deg, #0071e3, #34c759);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 10px; font-weight: 700; color: white;
+}
+.user-name { font-size: 11px; font-weight: 600; color: #1d1d1f; }
+.user-role { font-size: 9px; color: #86868b; }
+
+/* AI BUTTON in sidebar */
+.ai-button-sidebar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 10px; border-radius: 10px;
+  background: linear-gradient(135deg, rgba(0,113,227,0.07), rgba(94,92,230,0.07));
+  border: 1px solid rgba(0,113,227,0.15);
+  cursor: pointer; margin: 4px 0;
+}
+.ai-orb-mini {
+  width: 22px; height: 22px; border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #a78bfa, #0071e3 55%);
+  box-shadow: 0 0 8px rgba(0,113,227,0.3);
+  flex-shrink: 0;
+}
+.ai-label { font-size: 11.5px; font-weight: 600; color: #0071e3; }
+.ai-status { font-size: 9px; color: #86868b; }
+
+/* MAIN AREA */
+.main {
+  flex: 1; background: #f5f5f7;
+  display: flex; flex-direction: column;
+  overflow: hidden; position: relative;
+}
+
+/* TOPBAR */
+.topbar {
+  background: rgba(255,255,255,0.9);
+  backdrop-filter: blur(20px);
+  border-bottom: 1px solid rgba(0,0,0,0.06);
+  padding: 14px 24px;
+  display: flex; align-items: center; justify-content: space-between;
+  flex-shrink: 0;
+}
+
+.topbar-left {}
+.command-label { font-size: 10px; font-weight: 700; color: #0071e3; letter-spacing: 0.08em; text-transform: uppercase; }
+.page-title { font-size: 22px; font-weight: 800; color: #1d1d1f; letter-spacing: -0.03em; line-height: 1.2; }
+.page-sub { font-size: 12px; color: #86868b; margin-top: 1px; }
+.topbar-right { display: flex; align-items: center; gap: 8px; }
+.topbar-chip {
+  padding: 6px 14px; border-radius: 20px; font-size: 11px; font-weight: 600;
+  cursor: pointer;
+}
+.chip-outline { border: 1px solid rgba(0,0,0,0.1); color: #515154; background: white; }
+.chip-filled { background: #0071e3; color: white; border: none; }
+
+/* ALERT BANNER */
+.alert-banner {
+  margin: 16px 24px 0;
+  background: linear-gradient(135deg, #ff3b30, #ff9500);
+  border-radius: 12px; padding: 12px 16px;
+  display: flex; align-items: center; gap: 12px;
+  flex-shrink: 0;
+}
+.alert-icon { font-size: 18px; }
+.alert-text h4 { font-size: 13px; font-weight: 700; color: white; }
+.alert-text p { font-size: 11px; color: rgba(255,255,255,0.8); margin-top: 1px; }
+.alert-chips { margin-left: auto; display: flex; gap: 8px; }
+.alert-chip {
+  background: rgba(255,255,255,0.2); color: white;
+  padding: 4px 10px; border-radius: 20px; font-size: 10px; font-weight: 600;
+  white-space: nowrap;
+}
+
+/* CONTENT SCROLL */
+.content { flex: 1; overflow-y: auto; padding: 16px 24px 24px; }
+
+/* KPI CARDS */
+.kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+.kpi-card {
+  background: white; border-radius: 14px;
+  padding: 16px; box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+  display: flex; flex-direction: column; gap: 4px;
+}
+.kpi-icon-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.kpi-icon {
+  width: 36px; height: 36px; border-radius: 10px;
+  display: flex; align-items: center; justify-content: center; font-size: 16px;
+}
+.kpi-label { font-size: 10px; font-weight: 600; color: #86868b; text-transform: uppercase; letter-spacing: 0.05em; }
+.kpi-value { font-size: 24px; font-weight: 800; color: #1d1d1f; letter-spacing: -0.03em; }
+.kpi-sub { font-size: 11px; color: #86868b; }
+.kpi-tag { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 10px; margin-top: 4px; }
+.tag-green { background: rgba(52,199,89,0.1); color: #34c759; }
+.tag-red { background: rgba(255,59,48,0.1); color: #ff3b30; }
+.tag-blue { background: rgba(0,113,227,0.1); color: #0071e3; }
+.tag-amber { background: rgba(255,149,0,0.1); color: #ff9500; }
+
+/* MAIN GRID */
+.main-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+
+/* SECTION CARD */
+.section-card {
+  background: white; border-radius: 14px;
+  padding: 16px; box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+}
+.section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.section-title { font-size: 13px; font-weight: 700; color: #1d1d1f; }
+.section-link { font-size: 11px; color: #0071e3; font-weight: 500; cursor: pointer; }
+
+/* TASK LIST */
+.task-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 0; border-bottom: 1px solid rgba(0,0,0,0.04);
+}
+.task-item:last-child { border-bottom: none; }
+.task-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.task-text { font-size: 12px; color: #1d1d1f; font-weight: 500; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-badge { font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 10px; flex-shrink: 0; }
+
+/* SUMMARY ITEMS */
+.summary-item {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 12px; border-radius: 10px; margin-bottom: 6px;
+  cursor: pointer;
+}
+.summary-item:last-child { margin-bottom: 0; }
+.summary-left { display: flex; align-items: center; gap: 10px; }
+.summary-icon { font-size: 16px; width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; }
+.summary-label { font-size: 12px; font-weight: 600; color: #1d1d1f; }
+.summary-sub { font-size: 10px; color: #86868b; }
+.summary-count { font-size: 20px; font-weight: 800; color: #1d1d1f; }
+
+/* MINI CHART */
+.chart-bars { display: flex; align-items: flex-end; gap: 8px; height: 80px; margin-top: 8px; }
+.chart-bar-wrap { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: 1; }
+.chart-bar { width: 100%; border-radius: 4px 4px 0 0; min-height: 8px; }
+.chart-label { font-size: 9px; color: #86868b; text-align: center; }
+
+/* FLOATING AI BUTTON */
+.float-ai {
+  position: absolute; bottom: 24px; right: 24px;
+  width: 52px; height: 52px; border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #a78bfa, #0071e3 55%, #5e5ce6);
+  box-shadow: 0 4px 20px rgba(0,113,227,0.4), 0 0 0 4px rgba(0,113,227,0.1);
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; z-index: 50;
+  animation: glowPulse 3s ease-in-out infinite;
+}
+.float-ai-icon { font-size: 22px; }
+
+/* CHAT PANEL */
+.chat-panel {
+  position: absolute; top: 0; right: 0; bottom: 0;
+  width: 320px;
+  background: rgba(255,255,255,0.95);
+  backdrop-filter: blur(20px);
+  border-left: 1px solid rgba(0,0,0,0.08);
+  display: flex; flex-direction: column;
+  box-shadow: -8px 0 30px rgba(0,0,0,0.08);
+  z-index: 40;
+}
+.chat-header {
+  padding: 16px 16px 12px;
+  border-bottom: 1px solid rgba(0,0,0,0.06);
+  display: flex; align-items: center; gap: 10px;
+}
+.chat-orb { width: 32px; height: 32px; border-radius: 50%; background: radial-gradient(circle at 35% 35%, #a78bfa, #0071e3 55%); box-shadow: 0 2px 8px rgba(0,113,227,0.3); flex-shrink: 0; }
+.chat-title { font-size: 13px; font-weight: 700; color: #1d1d1f; }
+.chat-status { font-size: 10px; color: #34c759; }
+.chat-close { margin-left: auto; font-size: 18px; color: #86868b; cursor: pointer; }
+
+.chat-messages { flex: 1; overflow-y: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.chat-msg { display: flex; gap: 8px; align-items: flex-start; }
+.chat-msg.user { flex-direction: row-reverse; }
+.chat-bubble {
+  padding: 8px 12px; border-radius: 12px; font-size: 12px; line-height: 1.5;
+  max-width: 220px;
+}
+.chat-msg.ai .chat-bubble { background: #f5f5f7; color: #1d1d1f; border-radius: 4px 12px 12px 12px; }
+.chat-msg.user .chat-bubble { background: #0071e3; color: white; border-radius: 12px 4px 12px 12px; }
+
+.chat-input-wrap {
+  padding: 10px 14px 14px;
+  border-top: 1px solid rgba(0,0,0,0.06);
+}
+.chat-input-bar {
+  display: flex; align-items: center; gap: 8px;
+  background: #f5f5f7; border-radius: 12px; padding: 9px 12px;
+  border: 1px solid rgba(0,0,0,0.08);
+}
+.chat-input-text { flex: 1; font-size: 12px; color: #86868b; }
+.chat-send { width: 26px; height: 26px; background: #0071e3; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; color: white; cursor: pointer; }
+
+@keyframes glowPulse {
+  0%,100% { box-shadow: 0 4px 20px rgba(0,113,227,0.4), 0 0 0 4px rgba(0,113,227,0.1); }
+  50% { box-shadow: 0 4px 28px rgba(94,92,230,0.5), 0 0 0 6px rgba(0,113,227,0.15); }
+}
+</style>
+</head>
+<body>
+
+<p style="font-size:17px;font-weight:700;color:#1d1d1f;margin-bottom:4px;">Cerebro Personal — Dashboard v3</p>
+<p style="font-size:13px;color:#515154;margin-bottom:20px;">Apple design system · IA flotante · Panel de chat a la derecha · ¿Apruebas este diseño?</p>
+
+<div class="app">
+
+  <!-- SIDEBAR OSCURO -->
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <div class="logo-mark">CP</div>
+      <div>
+        <div class="logo-text">Cerebro Personal</div>
+        <div class="logo-sub">Ing. Javier Ospina</div>
+      </div>
+    </div>
+
+    <div class="nav-section">
+      <div class="nav-label">Principal</div>
+      <div class="nav-item active"><span class="nav-icon">⊞</span> Dashboard</div>
+      <div class="nav-item"><span class="nav-icon">✓</span> Tareas <span class="nav-badge amber">4</span></div>
+      <div class="nav-item"><span class="nav-icon">✏</span> Notas & Diario</div>
+      <div class="nav-item"><span class="nav-icon">$</span> Finanzas</div>
+    </div>
+
+    <div class="nav-section">
+      <div class="nav-label">Conexiones</div>
+      <div class="nav-item"><span class="nav-icon">📅</span> Google Calendar</div>
+      <div class="nav-item"><span class="nav-icon">⚙</span> Configuración</div>
+    </div>
+
+    <div style="padding: 8px; margin-top: 8px;">
+      <div class="ai-button-sidebar">
+        <div class="ai-orb-mini"></div>
+        <div>
+          <div class="ai-label">Asistente IA</div>
+          <div class="ai-status">● Activo · Gemini</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="sidebar-footer">
+      <div class="user-row">
+        <div class="user-avatar">JO</div>
+        <div>
+          <div class="user-name">Javier Ospina</div>
+          <div class="user-role">Director de Proyectos</div>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- MAIN -->
+  <main class="main">
+
+    <!-- TOPBAR -->
+    <div class="topbar">
+      <div class="topbar-left">
+        <div class="command-label">Command Center · Domingo, 17 de mayo</div>
+        <div class="page-title">Hola, Ing. Javier Ospina 👋</div>
+        <div class="page-sub">Aquí tienes el estado actual de tu operación.</div>
+      </div>
+      <div class="topbar-right">
+        <div class="topbar-chip chip-outline">Vista General</div>
+        <div class="topbar-chip chip-outline">📊 Finanzas</div>
+        <div class="topbar-chip chip-filled">+ Capturar</div>
+      </div>
+    </div>
+
+    <!-- CONTENT -->
+    <div class="content">
+
+      <!-- ALERT (solo si hay tareas vencidas) -->
+      <div class="alert-banner" style="margin-bottom:16px;">
+        <span class="alert-icon">⚠️</span>
+        <div class="alert-text">
+          <h4>4 Tareas requieren atención</h4>
+          <p>Tienes tareas vencidas o con fecha de hoy que requieren acción.</p>
+        </div>
+        <div class="alert-chips">
+          <span class="alert-chip">Revisar planos NSR-10 →</span>
+          <span class="alert-chip">Informe Banco Occidente →</span>
+        </div>
+      </div>
+
+      <!-- KPI CARDS -->
+      <div class="kpi-row">
+        <div class="kpi-card">
+          <div class="kpi-icon-row">
+            <div class="kpi-label">Tareas pendientes</div>
+            <div class="kpi-icon" style="background:rgba(255,149,0,0.1);">✓</div>
+          </div>
+          <div class="kpi-value">4</div>
+          <div class="kpi-sub">para hoy y esta semana</div>
+          <span class="kpi-tag tag-amber">⚠ 1 vencida</span>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-icon-row">
+            <div class="kpi-label">Gastos del mes</div>
+            <div class="kpi-icon" style="background:rgba(52,199,89,0.1);">$</div>
+          </div>
+          <div class="kpi-value">$225k</div>
+          <div class="kpi-sub">COP · Mayo 2026</div>
+          <span class="kpi-tag tag-green">37% del presupuesto</span>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-icon-row">
+            <div class="kpi-label">Notas guardadas</div>
+            <div class="kpi-icon" style="background:rgba(0,113,227,0.1);">✏</div>
+          </div>
+          <div class="kpi-value">12</div>
+          <div class="kpi-sub">reflexiones y apuntes</div>
+          <span class="kpi-tag tag-blue">última: hace 2h</span>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-icon-row">
+            <div class="kpi-label">Capturado hoy</div>
+            <div class="kpi-icon" style="background:rgba(94,92,230,0.1);">🧠</div>
+          </div>
+          <div class="kpi-value">7</div>
+          <div class="kpi-sub">ítems vía asistente IA</div>
+          <span class="kpi-tag tag-blue">IA activa</span>
+        </div>
+      </div>
+
+      <!-- MAIN GRID -->
+      <div class="main-grid">
+
+        <!-- TAREAS RECIENTES -->
+        <div class="section-card">
+          <div class="section-header">
+            <span class="section-title">📋 Tareas Activas</span>
+            <span class="section-link">Ver todo →</span>
+          </div>
+          <div class="task-item">
+            <div class="task-dot" style="background:#ff3b30;"></div>
+            <div class="task-text">Revisar planos NSR-10 bodega Bacca</div>
+            <span class="task-badge" style="background:rgba(255,59,48,0.1);color:#ff3b30;">Hoy</span>
+          </div>
+          <div class="task-item">
+            <div class="task-dot" style="background:#ff9500;"></div>
+            <div class="task-text">Informe CFRP Banco de Occidente</div>
+            <span class="task-badge" style="background:rgba(255,149,0,0.1);color:#ff9500;">Mañana</span>
+          </div>
+          <div class="task-item">
+            <div class="task-dot" style="background:#0071e3;"></div>
+            <div class="task-text">Presupuesto restaurante metálico</div>
+            <span class="task-badge" style="background:rgba(0,113,227,0.1);color:#0071e3;">Semana</span>
+          </div>
+          <div class="task-item">
+            <div class="task-dot" style="background:#34c759;"></div>
+            <div class="task-text">Entregar estudio geotécnico Main Corp</div>
+            <span class="task-badge" style="background:rgba(52,199,89,0.1);color:#34c759;">Semana</span>
+          </div>
+        </div>
+
+        <!-- MIS TAREAS RESUMEN -->
+        <div class="section-card">
+          <div class="section-header">
+            <span class="section-title">≡ Resumen de actividad</span>
+            <span class="section-link">Tablero →</span>
+          </div>
+          <div class="summary-item" style="background:rgba(255,59,48,0.05);">
+            <div class="summary-left">
+              <div class="summary-icon" style="background:rgba(255,59,48,0.1);">⚠️</div>
+              <div><div class="summary-label">Vencidas</div><div class="summary-sub">Requieren acción inmediata</div></div>
+            </div>
+            <div class="summary-count" style="color:#ff3b30;">1</div>
+          </div>
+          <div class="summary-item" style="background:rgba(255,149,0,0.05);">
+            <div class="summary-left">
+              <div class="summary-icon" style="background:rgba(255,149,0,0.1);">🕐</div>
+              <div><div class="summary-label">Para Hoy</div><div class="summary-sub">Deadline hoy</div></div>
+            </div>
+            <div class="summary-count" style="color:#ff9500;">2</div>
+          </div>
+          <div class="summary-item" style="background:rgba(0,113,227,0.04);">
+            <div class="summary-left">
+              <div class="summary-icon" style="background:rgba(0,113,227,0.08);">📅</div>
+              <div><div class="summary-label">Próximas</div><div class="summary-sub">Esta semana</div></div>
+            </div>
+            <div class="summary-count" style="color:#0071e3;">2</div>
+          </div>
+        </div>
+
+        <!-- GASTOS MINI CHART -->
+        <div class="section-card">
+          <div class="section-header">
+            <span class="section-title">💰 Gastos por categoría</span>
+            <span class="section-link">Ver finanzas →</span>
+          </div>
+          <div class="chart-bars">
+            <div class="chart-bar-wrap">
+              <div class="chart-bar" style="height:65px;background:#0071e3;border-radius:4px 4px 0 0;"></div>
+              <div class="chart-label">Obra</div>
+            </div>
+            <div class="chart-bar-wrap">
+              <div class="chart-bar" style="height:35px;background:#5e5ce6;border-radius:4px 4px 0 0;"></div>
+              <div class="chart-label">Alim.</div>
+            </div>
+            <div class="chart-bar-wrap">
+              <div class="chart-bar" style="height:20px;background:#34c759;border-radius:4px 4px 0 0;"></div>
+              <div class="chart-label">Trans.</div>
+            </div>
+            <div class="chart-bar-wrap">
+              <div class="chart-bar" style="height:45px;background:#ff9500;border-radius:4px 4px 0 0;"></div>
+              <div class="chart-label">Equip.</div>
+            </div>
+            <div class="chart-bar-wrap">
+              <div class="chart-bar" style="height:15px;background:#ff3b30;border-radius:4px 4px 0 0;"></div>
+              <div class="chart-label">Otro</div>
+            </div>
+          </div>
+          <div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(0,0,0,0.05);">
+            <div style="display:flex;justify-content:space-between;">
+              <span style="font-size:11px;color:#86868b;">Total mayo</span>
+              <span style="font-size:13px;font-weight:700;color:#1d1d1f;">$225,000 COP</span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- FLOATING AI BUTTON -->
+    <div class="float-ai" style="bottom:90px;">
+      <span class="float-ai-icon">🤖</span>
+    </div>
+
+    <!-- CHAT PANEL (visible a la derecha) -->
+    <div class="chat-panel" style="width:280px;">
+      <div class="chat-header">
+        <div class="chat-orb"></div>
+        <div>
+          <div class="chat-title">Asistente IA</div>
+          <div class="chat-status">● En línea · Gemini 2.5</div>
+        </div>
+        <div class="chat-close">✕</div>
+      </div>
+      <div class="chat-messages">
+        <div class="chat-msg ai">
+          <div class="chat-bubble">Hola Javier, tienes <strong>4 tareas</strong> activas y $225k en gastos este mes. ¿Cómo te ayudo hoy?</div>
+        </div>
+        <div class="chat-msg user">
+          <div class="chat-bubble">Agrega tarea: revisar planos bodega Bacca el miércoles</div>
+        </div>
+        <div class="chat-msg ai">
+          <div class="chat-bubble">✓ Tarea creada: <strong>"Revisar planos bodega Bacca"</strong> — miércoles 20 mayo.</div>
+        </div>
+      </div>
+      <div class="chat-input-wrap">
+        <div class="chat-input-bar">
+          <span style="font-size:14px;">🎙</span>
+          <div class="chat-input-text">Escribe o habla...</div>
+          <div class="chat-send">↑</div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<div style="max-width:1200px;margin:16px auto 0;display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
+  <div style="background:white;border-radius:10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,0.06);">
+    <div style="font-size:12px;font-weight:700;color:#1d1d1f;margin-bottom:4px;">🎨 Sidebar claro</div>
+    <div style="font-size:11px;color:#515154;line-height:1.5;">Fondo blanco, Apple light system, nav activo en azul suave, logo CP, badge de alertas en rojo.</div>
+  </div>
+  <div style="background:white;border-radius:10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,0.06);">
+    <div style="font-size:12px;font-weight:700;color:#1d1d1f;margin-bottom:4px;">📊 Dashboard ejecutivo</div>
+    <div style="font-size:11px;color:#515154;line-height:1.5;">4 KPI cards + banner de alertas + grid de 3 secciones. Datos reales del app.</div>
+  </div>
+  <div style="background:white;border-radius:10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,0.06);">
+    <div style="font-size:12px;font-weight:700;color:#1d1d1f;margin-bottom:4px;">🤖 IA flotante + panel</div>
+    <div style="font-size:11px;color:#515154;line-height:1.5;">Botón orb flotante siempre visible. Click → panel de chat se abre desde la derecha.</div>
+  </div>
+</div>
+
+</body>
+</html>

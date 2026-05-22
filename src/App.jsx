@@ -1,4 +1,16 @@
-import { useState, useEffect, useRef } from "react";
+import { Component, useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { callAI } from "./lib/ai.js";
+import {
+  requestGmailToken, refreshGmailToken, revokeGmailToken, getStoredToken, getRawToken,
+  fetchInboxEmails, getGmailUserEmail, clearToken, isTokenNearExpiry,
+  fetchUnreadSince, aplicarPrioridadLabel, createDraftAPI,
+} from "./lib/gmail.js";
+import {
+  startPersistentGmailConnect,
+  fetchPersistentGmailEmails,
+  getPersistentGmailStatus,
+  disconnectPersistentGmail,
+} from "./lib/gmailPersistent.js";
 import {
   supabase,
   loadAllUserData,
@@ -21,317 +33,591 @@ import ViewReuniones from "./views/ViewReuniones.jsx";
 import ViewCalendario from "./views/ViewCalendario.jsx";
 import ViewTareas from "./views/ViewTareas.jsx";
 import ViewCorreos from "./views/ViewCorreos.jsx";
+import ViewClientes from "./views/ViewClientes.jsx";
+import ViewProyectos from "./views/ViewProyectos.jsx";
+import ViewCotizaciones from "./views/ViewCotizaciones.jsx";
+import ViewCartera from "./views/ViewCartera.jsx";
+import { clientsDB, projectsDB, quotesDB, QUOTE_STATUSES, PROJECT_STATUSES } from "./lib/supabaseCRM.js";
+import { getDynamicWorkspaceData } from "./lib/workspaceData.js";
 
-// ── Paletas de tema ───────────────────────────────────────────────────────────
-const LIGHT = {
-  bg: "#f0f0f5", surface: "#ffffff", surfaceHigh: "rgba(255,255,255,0.95)",
-  border: "rgba(0,0,0,0.08)", borderHigh: "rgba(0,0,0,0.15)",
-  accent: "#0071e3", accentSoft: "rgba(0,113,227,0.07)", accentGlow: "rgba(0,113,227,0.18)",
-  teal: "#24b495", tealSoft: "rgba(36,180,149,0.07)", tealGlow: "rgba(36,180,149,0.18)",
-  amber: "#ff9500", amberSoft: "rgba(255,149,0,0.07)", amberGlow: "rgba(255,149,0,0.18)",
-  coral: "#ff3b30", coralSoft: "rgba(255,59,48,0.07)", coralGlow: "rgba(255,59,48,0.18)",
-  green: "#34c759", greenSoft: "rgba(52,199,89,0.07)", greenGlow: "rgba(52,199,89,0.18)",
-  purple: "#5e5ce6", purpleSoft: "rgba(94,92,230,0.07)",
-  textPrimary: "#1d1d1f", textSecondary: "#515154", textTertiary: "#86868b",
-};
-const DARK = {
-  bg: "#0f0f14", surface: "#1a1a24", surfaceHigh: "#22222e",
-  border: "rgba(255,255,255,0.08)", borderHigh: "rgba(255,255,255,0.14)",
-  accent: "#0a84ff", accentSoft: "rgba(10,132,255,0.18)", accentGlow: "rgba(10,132,255,0.3)",
-  teal: "#5ac8fa", tealSoft: "rgba(90,200,250,0.15)", tealGlow: "rgba(90,200,250,0.25)",
-  amber: "#ff9f0a", amberSoft: "rgba(255,159,10,0.15)", amberGlow: "rgba(255,159,10,0.25)",
-  coral: "#ff453a", coralSoft: "rgba(255,69,58,0.15)", coralGlow: "rgba(255,69,58,0.25)",
-  green: "#30d158", greenSoft: "rgba(48,209,88,0.15)", greenGlow: "rgba(48,209,88,0.25)",
-  purple: "#bf5af2", purpleSoft: "rgba(191,90,242,0.15)",
-  textPrimary: "#f5f5f7", textSecondary: "#aeaeb2", textTertiary: "#636366",
-};
-// G a nivel de módulo apunta a LIGHT (para el css template); en el componente se sobrescribe
+// ── Paletas de tema — CRM Design System ──────────────────────────────────────
+// Brand Colors: Corporate RED = #901B2F | Corporate BLUE = #1F3A52
+import { LIGHT, DARK } from "./lib/theme.js";
+
 let G = LIGHT;
 
 // Pantalla de carga inicial mientras se sincronizan los datos de Supabase
 function SyncingScreen({ darkMode }) {
-  const bg   = darkMode ? "#0f0f14" : "#f0f0f5";
-  const text = darkMode ? "#f5f5f7" : "#1d1d1f";
-  const sub  = darkMode ? "#aeaeb2" : "#515154";
+  const bg = darkMode ? "#070913" : "#f8fafc";
+  const text = darkMode ? "#f8fafc" : "#0f172a";
+  const sub = darkMode ? "#94a3b8" : "#475569";
   return (
     <div style={{
       minHeight: "100vh", background: bg,
       display: "flex", flexDirection: "column",
       alignItems: "center", justifyContent: "center", gap: 18,
-      fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif",
+      fontFamily: "Inter, 'Segoe UI', system-ui, -apple-system, sans-serif",
+      position: "relative",
+      overflow: "hidden",
     }}>
-      <div style={{ width: 36, height: 36, borderRadius: 10, background: "linear-gradient(135deg,#0071e3,#5e5ce6)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-          <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+      <style>{css}</style>
+      <div className={`bg-radial-glow ${darkMode ? "dark-glow" : ""}`} />
+      <div style={{
+        width: 52, height: 52, borderRadius: 14,
+        background: "linear-gradient(135deg, #1F3A52 0%, #901B2F 100%)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        boxShadow: darkMode 
+          ? "0 8px 24px rgba(144, 27, 47, 0.25), 0 0 0 1px rgba(255,255,255,0.06)" 
+          : "0 8px 24px rgba(31, 58, 82, 0.12)",
+        zIndex: 2,
+      }}>
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+          <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       </div>
-      <div style={{ textAlign: "center" }}>
-        <div style={{ fontSize: 15, fontWeight: 700, color: text, marginBottom: 6 }}>Cargando tus datos...</div>
-        <div style={{ fontSize: 12, color: sub }}>Sincronizando con Supabase</div>
+      <div style={{ textAlign: "center", zIndex: 2 }}>
+        <div style={{ fontSize: 16, fontWeight: 800, color: text, marginBottom: 6, fontFamily: "Outfit, sans-serif", letterSpacing: "-0.02em" }}>Cargando tus datos...</div>
+        <div style={{ fontSize: 12.5, color: sub, fontWeight: 500 }}>Sincronizando con Supabase</div>
       </div>
-      <div style={{ width: 200, height: 3, background: darkMode ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)", borderRadius: 4, overflow: "hidden" }}>
+      <div style={{ width: 200, height: 3, background: darkMode ? "rgba(255,255,255,0.08)" : "#e2e8f0", borderRadius: 4, overflow: "hidden", zIndex: 2 }}>
         <style>{`@keyframes sp-pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }`}</style>
-        <div style={{ width: "60%", height: "100%", background: "#0071e3", borderRadius: 4, animation: "sp-pulse 1.4s ease-in-out infinite" }} />
+        <div style={{ width: "60%", height: "100%", background: "#901B2F", borderRadius: 4, animation: "sp-pulse 1.4s ease-in-out infinite" }} />
       </div>
     </div>
   );
 }
 
-// Función para obtener dinámicamente datos de Workspace (Gmail + Calendar) según el correo
-export function getDynamicWorkspaceData(email) {
-  const normEmail = (email || "").toLowerCase().trim();
-  if (normEmail === "suelosyestructuras@gmail.com") {
-    return {
-      calendar: [
-        { time: "09:30 AM", title: "Revisión Presupuesto Fibra de Carbono con Alfonso", loc: "Oficina Virtual Google Meet" },
-        { time: "11:00 AM", title: "Llamada con Abogada Claudia - Petición I-140", loc: "Línea Directa" },
-        { time: "02:00 PM", title: "Entrega de Planos San Antonio a Arq. Carlos Holmes", loc: "Sala de Juntas" },
-        { time: "04:30 PM", title: "Discusión Técnica San Vicente (Daniel Guerrero & Eder Moran)", loc: "Sede Norte" }
-      ],
-      gmail: [
-        { tab:"primario",       sender:"alfonso.diseno@carbono.com",           subj:"PRESUPUESTO PROPUESTA 1 - CINTAS DE FIBRA DE CARBONO",               body:"Ing. Ospina, ya estoy revisando el presupuesto para la propuesta de diseño original con cintas de fibra de carbono para el proyecto. Saludos, Alfonso Otero.",                                                                          badgeBg:"rgba(255,149,0,0.08)",  badgeColor:"#ff9500", badgeText:"Presupuesto Fibra Carbono",       time:"09:15 AM" },
-        { tab:"primario",       sender:"claudia.abogada@gmail.com",            subj:"Re: Resumen Reunión - Decisión USCIS Petición I-140",                 body:"Estimado Ing. Ospina, adjunto el resumen de la reunión y la decisión de USCIS sobre la Petición I-140 de Claudia Patricia Agudelo Bedoya. Atentamente, Claudia.",                                                                  badgeBg:"rgba(0,113,227,0.08)",  badgeColor:"#0071e3", badgeText:"Petición I-140 USCIS",           time:"11:30 AM" },
-        { tab:"primario",       sender:"carlos.holmes@arquitectura.co",        subj:"PROYECTO SAN ANTONIO - MAURICIO COLLAZOS",                           body:"Ing. Ospina, remito el plano y la memoria del Proyecto San Antonio para la revisión de Mauricio Collazos. Cualquier inquietud me llama. Cel: 311-6276551.",                                                                        badgeBg:"rgba(0,113,227,0.08)",  badgeColor:"#0071e3", badgeText:"Plano San Antonio",               time:"12:45 PM" },
-        { tab:"primario",       sender:"thiago.escobar@estructura.co",         subj:"D3. SAN VICENTE-ARQ V.1 - EDER FABIAN MORAN",                        body:"Buenas Noches Ing. Javier Ospina / Daniel Guerrero. Remito la versión V.1 de diseño estructural del Proyecto San Vicente elaborado por Eder Fabian Moran.",                                                                        badgeBg:"rgba(52,199,89,0.08)",  badgeColor:"#34c759", badgeText:"Diseño Estructural San Vicente",   time:"03:20 PM" },
-        { tab:"actualizaciones",sender:"sika-anchorfix@sika.com",              subj:"Sika AnchorFix - Registration approved",                             body:"Dear JAVIER OSPINA, Your registration for Sika AnchorFix has been approved. Please use the linked portal to complete the onboarding.",                                                                                                  badgeBg:"rgba(52,199,89,0.08)",  badgeColor:"#34c759", badgeText:"Registro Sika Aprobado",          time:"02:10 AM" },
-        { tab:"actualizaciones",sender:"noreply@bancolombia.com.co",           subj:"Extracto de cuenta disponible - Mayo 2026",                          body:"Ing. Ospina, su extracto de cuenta de ahorros correspondiente al mes de Mayo 2026 ya está disponible en la sucursal virtual.",                                                                                                           badgeBg:"rgba(0,113,227,0.08)",  badgeColor:"#0071e3", badgeText:"Extracto Bancolombia Mayo",       time:"06:00 AM" },
-        { tab:"actualizaciones",sender:"facturacion@autodesk.com",             subj:"Factura suscripción Autodesk Revit 2026",                            body:"Su suscripción anual de Autodesk Revit ha sido renovada exitosamente por $3,450,000 COP. Transacción aprobada. Número de factura: AUT-2026-00445.",                                                                                    badgeBg:"rgba(255,149,0,0.08)",  badgeColor:"#ff9500", badgeText:"Factura Autodesk Revit",          time:"08:00 AM" },
-        { tab:"social",         sender:"notifications@linkedin.com",           subj:"Javier, tienes 4 nuevas solicitudes de conexión",                    body:"Cuatro profesionales quieren conectar contigo en LinkedIn: Daniel Guerrero (Ing. Civil), María Valdés (Arquitecta), Felipe Torres (Curador Urbano), Ana Ríos (BIM Manager).",                                                          badgeBg:"rgba(10,102,194,0.08)", badgeColor:"#0a66c2", badgeText:"LinkedIn Conexiones",              time:"07:45 AM" },
-        { tab:"social",         sender:"noreply@whatsapp.com",                 subj:"Nuevo mensaje en el grupo Obra San Vicente",                         body:"Daniel Guerrero: Ing. Ospina, ¿confirmamos la visita a la obra para el viernes? Necesito su aprobación para el vaciado del núcleo.",                                                                                                    badgeBg:"rgba(37,211,102,0.08)", badgeColor:"#25d366", badgeText:"WhatsApp Obra San Vicente",        time:"10:20 AM" },
-        { tab:"promociones",    sender:"ofertas@sika.com.co",                  subj:"Descuento especial Sika Colombia - Junio 2026",                      body:"Ing. Ospina, durante junio 2026 tenemos descuentos del 18% en toda la línea SikaTop y SikaFlex para proyectos NSR-10. Válido hasta el 30 de junio.",                                                                                 badgeBg:"rgba(255,59,48,0.06)",  badgeColor:"#ff3b30", badgeText:"Promo Sika Junio 18%",            time:"01:00 PM" },
-        { tab:"promociones",    sender:"newsletter@construdata.com",           subj:"Nuevas normas NSR-10 Resolución 0549 de 2026",                       body:"Le informamos sobre la Resolución 0549 de 2026 que modifica los capítulos A.2 y E.1 del Reglamento NSR-10. Descargue el resumen técnico gratuito.",                                                                                  badgeBg:"rgba(94,92,230,0.08)",  badgeColor:"#5e5ce6", badgeText:"Actualización NSR-10",            time:"02:30 PM" }
-      ]
-    };
-  } else if (normEmail.includes("curaduria")) {
-    return {
-      calendar: [
-        { time: "08:00 AM", title: "Radicación de planos NSR-10", loc: "Curaduría Urbana 4" },
-        { time: "10:30 AM", title: "Cita con Curador por ajuste de Ejes estructurales", loc: "Oficina del Curador" },
-        { time: "03:30 PM", title: "Revisión de Licencia de Construcción Portal", loc: "Sala Técnica" }
-      ],
-      gmail: [
-        { tab:"primario",       sender:"licencias@curaduria4.gov.co",          subj:"Citación Corrección Planos Estructurales - Radicado 2026-0045",      body:"Ing. Ospina, se le cita para subsanar observaciones de resistencia sismorresistente en el Eje D. Plazo máximo de 3 días hábiles.",                                                                                                  badgeBg:"rgba(255,59,48,0.08)",  badgeColor:"#ff3b30", badgeText:"Corrección Crítica Licencia",    time:"08:15 AM" },
-        { tab:"primario",       sender:"arquitectura.curaduria@bogota.gov.co", subj:"Aprobación de Parámetros Urbanísticos Portal",                       body:"El diseño arquitectónico cumple con las alturas y retiros normativos. Proceda al cargue de memorias de cálculo sismorresistente.",                                                                                                       badgeBg:"rgba(52,199,89,0.08)",  badgeColor:"#34c759", badgeText:"Arquitectura Aprobada NSR-10",    time:"02:20 PM" },
-        { tab:"actualizaciones",sender:"notificaciones@curaduria4.gov.co",     subj:"Pago de Expensas Fijas - Radicado Portal",                           body:"Se ha generado el recibo para el pago de expensas fijas correspondientes a la revisión estructural por un valor de $1,250,000 COP.",                                                                                                  badgeBg:"rgba(255,149,0,0.08)",  badgeColor:"#ff9500", badgeText:"Pago Expensas $1.25M",           time:"10:45 AM" },
-        { tab:"actualizaciones",sender:"sistema@ventanilladigital.gov.co",     subj:"Radicado 2026-0045: Estado actualizado a REVISION TECNICA",          body:"El expediente 2026-0045 ha cambiado de estado a REVISION TECNICA. Consulte el portal de la Curaduría para más detalles.",                                                                                                           badgeBg:"rgba(0,113,227,0.08)",  badgeColor:"#0071e3", badgeText:"Estado Radicado Actualizado",     time:"09:00 AM" },
-        { tab:"social",         sender:"notifications@linkedin.com",           subj:"3 profesionales vieron tu perfil esta semana",                       body:"Tu perfil fue visto por 3 personas esta semana, entre ellas un Curador Urbano de Bogotá y un Director de Licencias de Construcción.",                                                                                                badgeBg:"rgba(10,102,194,0.08)", badgeColor:"#0a66c2", badgeText:"LinkedIn Vistas Perfil",           time:"06:30 AM" },
-        { tab:"promociones",    sender:"info@cursosnsr10.com",                 subj:"Certificación NSR-10 Online - Inicio Junio 2026",                    body:"Actualice su certificación NSR-10 con nuestro curso en línea de 40 horas. Cupos limitados. Descuento del 20% para ingenieros registrados en COPNIA.",                                                                                badgeBg:"rgba(94,92,230,0.08)",  badgeColor:"#5e5ce6", badgeText:"Curso NSR-10 Online",             time:"12:00 PM" }
-      ]
-    };
-  } else if (normEmail.includes("construito")) {
-    return {
-      calendar: [
-        { time: "09:00 AM", title: "Sincronización semanal de Obra y Control de Calidad", loc: "Sede Principal Construito" },
-        { time: "01:30 PM", title: "Pruebas de Cilindros de Concreto (Resistencia 28 días)", loc: "Laboratorio de Suelos" },
-        { time: "04:00 PM", title: "Comité Técnico: Optimización de Pórticos y Vigas", loc: "Sala de Juntas" }
-      ],
-      gmail: [
-        { tab:"primario",       sender:"ingenieria@construito.co",             subj:"Memorias de Cálculo Optimización Cimentación - Fase II",             body:"Ing. Javier, adjunto la propuesta de cimentación con zapatas combinadas optimizadas para reducir costos en un 15% de volumen.",                                                                                                        badgeBg:"rgba(0,113,227,0.08)",  badgeColor:"#0071e3", badgeText:"Optimización Cimentación",       time:"09:00 AM" },
-        { tab:"primario",       sender:"eder.moran@construito.co",             subj:"Plano Estructural Versión Final V.2 - Pórticos Eje 4",               body:"Ing. Ospina, remito el plano ajustado con el refuerzo adicional de vigas solicitado por el revisor independiente de NSR-10.",                                                                                                        badgeBg:"rgba(52,199,89,0.08)",  badgeColor:"#34c759", badgeText:"Plano V.2 Pórticos Eje 4",        time:"11:15 AM" },
-        { tab:"primario",       sender:"compras@construito.co",                subj:"Cotización Acero Refuerzo Grado 60 - Proyecto Portal",               body:"Recibimos cotización de Diaco por 25 toneladas de acero figurado para el Proyecto Portal por $112,000,000 COP. Pendiente firma de gerencia.",                                                                                      badgeBg:"rgba(255,149,0,0.08)",  badgeColor:"#ff9500", badgeText:"Cotización Acero $112M",          time:"02:40 PM" },
-        { tab:"actualizaciones",sender:"laboratorio@construito.co",            subj:"Resultados Cilindros Concreto f'c=21 MPa - Muestra Lote 8",          body:"Los resultados de compresión a los 28 días del Lote 8 arrojaron f'c=23.4 MPa, cumpliendo la especificación mínima de 21 MPa. Adjunto certificado.",                                                                                badgeBg:"rgba(52,199,89,0.08)",  badgeColor:"#34c759", badgeText:"Ensayo Concreto Aprobado",        time:"07:30 AM" },
-        { tab:"actualizaciones",sender:"nomina@construito.co",                 subj:"Liquidación quincenal Mayo 16-31 disponible",                        body:"La liquidación de nómina de la segunda quincena de Mayo 2026 está disponible en el portal de empleados. Fecha de pago: 31 de Mayo.",                                                                                                badgeBg:"rgba(0,113,227,0.08)",  badgeColor:"#0071e3", badgeText:"Nómina Quincenal Disponible",     time:"10:00 AM" },
-        { tab:"social",         sender:"noreply@construito-teams.co",          subj:"Eder Moran te mencionó en el canal #estructuras",                    body:"Eder Moran: @Ing.Ospina ya subí los planos V.2 al servidor compartido. Por favor revisar el refuerzo del nudo de la columna C4 antes del vaciado del miércoles.",                                                                   badgeBg:"rgba(52,199,89,0.08)",  badgeColor:"#34c759", badgeText:"Teams #Estructuras",              time:"03:15 PM" },
-        { tab:"promociones",    sender:"ventas@diaco.com.co",                  subj:"Listas de precios Acero DIACO - Junio 2026",                         body:"Estimado cliente, adjuntamos las listas actualizadas de precios para acero corrugado Grado 60 y Grado 40. Precios válidos hasta el 30 de junio 2026.",                                                                               badgeBg:"rgba(255,149,0,0.06)",  badgeColor:"#ff9500", badgeText:"Precios Acero DIACO Junio",       time:"08:45 AM" }
-      ]
-    };
-  } else {
-    return {
-      calendar: [
-        { time: "09:00 AM", title: "Reunión de Coordinación NSR-10", loc: "Oficina Virtual Google Meet" },
-        { time: "11:30 AM", title: "Revisión de Presupuesto Copropietarios", loc: "Sala de Juntas" },
-        { time: "03:00 PM", title: "Inspección Técnica de Obra", loc: "Sede Norte Construito" }
-      ],
-      gmail: [
-        { tab:"primario",       sender:"iberia.notificaciones@iberia.com",     subj:"Confirmación de Reserva IB6801 (BOG - MAD)",                        body:"Estimado Ing. Ospina, confirmamos su vuelo a Madrid el 24 de Mayo. Salida: 18:20h. Asiento: 12C.",                                                                                                                                   badgeBg:"rgba(52,199,89,0.08)",  badgeColor:"#34c759", badgeText:"Vuelo BOG-MAD Confirmado",        time:"08:15 AM" },
-        { tab:"primario",       sender:"curaduria4@bogota.gov.co",             subj:"Observaciones estructurales NSR-10 — Portal",                        body:"Ing. Ospina, se solicita ajustar el cálculo sismorresistente NSR-10 en pórticos del Eje C. Plazo de 5 días hábiles.",                                                                                                                   badgeBg:"rgba(0,113,227,0.08)",  badgeColor:"#0071e3", badgeText:"Observaciones NSR-10",            time:"11:45 AM" },
-        { tab:"actualizaciones",sender:"facturacion@autodesk.com",             subj:"Su factura de suscripción anual Autodesk Revit",                     body:"Su suscripción se ha renovado con éxito por un monto de $3,450,000 COP. Transacción aprobada.",                                                                                                                                       badgeBg:"rgba(255,149,0,0.08)",  badgeColor:"#ff3b30", badgeText:"Factura Autodesk $3.45M",         time:"09:30 AM" },
-        { tab:"social",         sender:"notifications@linkedin.com",           subj:"5 nuevas solicitudes de conexión esta semana",                       body:"5 profesionales del sector de la construcción quieren conectar contigo en LinkedIn.",                                                                                                                                                   badgeBg:"rgba(10,102,194,0.08)", badgeColor:"#0a66c2", badgeText:"LinkedIn Conexiones",              time:"07:00 AM" },
-        { tab:"promociones",    sender:"ofertas@cemargos.com.co",              subj:"Promoción cemento Argos - Descuento Mayo 2026",                      body:"Ing. Ospina, durante mayo ofrecemos descuentos especiales en cemento Portland tipo I y tipo ARI para proyectos de gran volumen.",                                                                                                    badgeBg:"rgba(255,59,48,0.06)",  badgeColor:"#ff3b30", badgeText:"Promo Cemento Argos",             time:"10:00 AM" }
-      ]
-    };
-  }
-}
-
 const css = `
   @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800;900&display=swap');
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { 
-    background: #f5f5f7; 
-    color: ${G.textPrimary}; 
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
+  body {
+    background: #f8fafc;
+    color: var(--text-primary);
+    font-family: Inter, 'Segoe UI', system-ui, -apple-system, sans-serif;
     overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
-  ::-webkit-scrollbar { width: 4px; } 
+  
+  /* Ultra-Premium auto-expanding macOS scrollbars */
+  ::-webkit-scrollbar { width: 5px; height: 5px; } 
   ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, 0.12); border-radius: 2px; }
-  button { cursor: pointer; border: none; background: none; font-family: inherit; color: inherit; outline: none; }
+  ::-webkit-scrollbar-thumb { 
+    background: rgba(31, 58, 82, 0.12); 
+    border-radius: 99px; 
+    transition: background 0.3s ease;
+  }
+  ::-webkit-scrollbar-thumb:hover { 
+    background: rgba(31, 58, 82, 0.28); 
+  }
+  .workspace-container.dark ::-webkit-scrollbar-thumb { 
+    background: rgba(255, 255, 255, 0.14); 
+  }
+  .workspace-container.dark ::-webkit-scrollbar-thumb:hover { 
+    background: rgba(255, 255, 255, 0.30); 
+  }
+
+  /* Tactile Spring Physics Micro-interactions & Smooth transitions */
+  button, .btn-apple, .apple-card, .apple-card-dark, .apple-card-gradient, .apple-quick-action, .sidebar-nav-btn, .sidebar-connection-btn, .sidebar-assistant-chip, .sidebar-api-btn, .glass-input {
+    transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1), 
+                background-color 0.25s ease, 
+                color 0.25s ease, 
+                box-shadow 0.4s cubic-bezier(0.34, 1.56, 0.64, 1), 
+                border-color 0.3s ease, 
+                filter 0.3s ease;
+  }
+  button, .btn-apple { 
+    cursor: pointer; 
+    border: none; 
+    background: none; 
+    font-family: inherit; 
+    color: inherit; 
+    outline: none; 
+  }
+  button:active, .btn-apple:active, .sidebar-nav-btn:active, .apple-quick-action:active, .apple-card:active { 
+    transform: scale(0.96) !important; 
+  }
+  
   input, textarea { font-family: inherit; }
-  @keyframes fadeIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
-  @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.5; } }
+  
+  /* Staggered & Liquid Animations */
+  @keyframes fadeIn { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:translateY(0); } }
+  @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
   @keyframes spin { to { transform: rotate(360deg); } }
-  @keyframes ripple { 0% { transform:scale(1); opacity:0.3; } 100% { transform:scale(2.5); opacity:0; } }
+  @keyframes ripple { 0% { transform:scale(1); opacity:0.35; } 100% { transform:scale(2.6); opacity:0; } }
   @keyframes slideIn { from { opacity:0; transform:translateX(-12px); } to { opacity:1; transform:translateX(0); } }
   
-  /* Orb Animations */
+  @keyframes nebulaFloat {
+    0%, 100% { transform: translate(0, 0) scale(1) rotate(0deg); }
+    33% { transform: translate(4%, 3%) scale(1.05) rotate(5deg); }
+    66% { transform: translate(-3%, 5%) scale(0.96) rotate(-4deg); }
+  }
+
+  /* Elegant Apple HIG Typography */
+  .large-title {
+    font-size: 2.25rem !important;
+    font-weight: 850 !important;
+    letter-spacing: -0.03em !important;
+    line-height: 1.15 !important;
+    font-family: 'Outfit', sans-serif !important;
+  }
+  .title-1 {
+    font-size: 1.85rem !important;
+    font-weight: 800 !important;
+    letter-spacing: -0.025em !important;
+    line-height: 1.2 !important;
+    font-family: 'Outfit', sans-serif !important;
+  }
+  .title-2 {
+    font-size: 1.45rem !important;
+    font-weight: 700 !important;
+    letter-spacing: -0.02em !important;
+    line-height: 1.25 !important;
+    font-family: 'Outfit', sans-serif !important;
+  }
+  .title-3 {
+    font-size: 1.25rem !important;
+    font-weight: 600 !important;
+    letter-spacing: -0.015em !important;
+    line-height: 1.3 !important;
+    font-family: 'Outfit', sans-serif !important;
+  }
+  .headline {
+    font-size: 1.0625rem !important;
+    font-weight: 600 !important;
+    letter-spacing: -0.01em !important;
+  }
+  .body-text {
+    font-size: 1.0625rem !important;
+    font-weight: 400 !important;
+    line-height: 1.55 !important;
+  }
+  .callout {
+    font-size: 1rem !important;
+    font-weight: 400 !important;
+  }
+  .subhead {
+    font-size: 0.9375rem !important;
+    font-weight: 500 !important;
+  }
+  .footnote {
+    font-size: 0.8125rem !important;
+    font-weight: 500 !important;
+    letter-spacing: 0.01em !important;
+  }
+  .caption-1 {
+    font-size: 0.75rem !important;
+    font-weight: 500 !important;
+    letter-spacing: 0.02em !important;
+  }
+  .caption-2 {
+    font-size: 0.6875rem !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.03em !important;
+    text-transform: uppercase;
+  }
+
+  /* Animated Siri-like AI Orbs & Mesh Gradients */
   @keyframes floatOrb {
-    0%, 100% { transform: translateY(0) scale(1); }
-    50% { transform: translateY(-4px) scale(1.02); }
+    0%, 100% { transform: translateY(0px) scale(1); filter: brightness(1) drop-shadow(0 8px 30px rgba(139, 92, 246, 0.22)); }
+    50% { transform: translateY(-7px) scale(1.05); filter: brightness(1.18) drop-shadow(0 15px 42px rgba(139, 92, 246, 0.40)); }
   }
   @keyframes glowPulse {
-    0%, 100% { box-shadow: 0 0 15px rgba(0, 113, 227, 0.2), inset 0 0 10px rgba(255, 255, 255, 0.6); }
-    50% { box-shadow: 0 0 25px rgba(110, 0, 245, 0.35), inset 0 0 15px rgba(255, 255, 255, 0.7); }
+    0%, 100% { box-shadow: 0 0 25px rgba(31, 58, 82, 0.35), 0 0 0 1px rgba(255,255,255,0.08); }
+    50% { box-shadow: 0 0 45px rgba(139, 92, 246, 0.50), 0 0 0 1px rgba(255,255,255,0.18); }
   }
   @keyframes glowPulseListening {
-    0%, 100% { box-shadow: 0 0 15px rgba(255, 59, 48, 0.35), inset 0 0 10px rgba(255, 255, 255, 0.6); transform: scale(1); }
-    50% { box-shadow: 0 0 35px rgba(255, 149, 0, 0.55), inset 0 0 20px rgba(255, 255, 255, 0.8); transform: scale(1.08); }
+    0%, 100% { box-shadow: 0 0 22px rgba(144, 27, 47, 0.45), inset 0 0 12px rgba(255, 255, 255, 0.6); transform: scale(1); }
+    50% { box-shadow: 0 0 45px rgba(230, 126, 34, 0.65), inset 0 0 24px rgba(255, 255, 255, 0.85); transform: scale(1.06); }
   }
   @keyframes glowPulseThinking {
-    0%, 100% { box-shadow: 0 0 15px rgba(0, 113, 227, 0.25), inset 0 0 10px rgba(255, 255, 255, 0.6); }
-    50% { box-shadow: 0 0 30px rgba(48, 176, 199, 0.55), inset 0 0 15px rgba(255, 255, 255, 0.8); }
-  }
-  @keyframes spinOrb {
-    0% { transform: rotate(0deg); }
-    100% { transform: rotate(360deg); }
+    0%, 100% { box-shadow: 0 0 22px rgba(31, 58, 82, 0.35), inset 0 0 12px rgba(255, 255, 255, 0.6); }
+    50% { box-shadow: 0 0 45px rgba(59, 130, 246, 0.70), inset 0 0 24px rgba(255, 255, 255, 0.85); }
   }
   
-  /* Floating Tags animations */
   @keyframes floatingTag1 {
     0%, 100% { transform: translateY(0px) rotate(0deg); }
-    50% { transform: translateY(-5px) rotate(1deg); }
+    50% { transform: translateY(-5px) rotate(1.2deg); }
   }
   @keyframes floatingTag2 {
     0%, 100% { transform: translateY(0px) rotate(0deg); }
-    50% { transform: translateY(-7px) rotate(-1.5deg); }
-  }
-  @keyframes floatingTag3 {
-    0%, 100% { transform: translateY(0px) rotate(0deg); }
-    50% { transform: translateY(-4px) rotate(1.2deg); }
+    50% { transform: translateY(-7px) rotate(-1.8deg); }
   }
 
-  .fade-in { animation: fadeIn 0.4s cubic-bezier(0.4, 0, 0.2, 1) forwards; }
-  .slide-in { animation: slideIn 0.3s cubic-bezier(0.4, 0, 0.2, 1) forwards; }
+  .fade-in { animation: fadeIn 0.45s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+  .slide-in { animation: slideIn 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
   
+  /* Modern Glass Inputs with Cenital Focus Rings */
   .glass-input {
-    background: rgba(255, 255, 255, 0.85);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
-    border: 1px solid rgba(0, 0, 0, 0.08);
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    background: rgba(255, 255, 255, 0.80);
+    backdrop-filter: blur(24px) saturate(190%);
+    -webkit-backdrop-filter: blur(24px) saturate(190%);
+    border: 1px solid rgba(31, 58, 82, 0.08);
+    border-radius: 12px;
+    outline: none;
   }
-  .glass-input:focus-within {
-    border-color: ${G.accent};
-    box-shadow: 0 0 18px rgba(0, 113, 227, 0.15);
+  .workspace-container.dark .glass-input {
+    background: rgba(15, 20, 35, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+  }
+  .glass-input:focus-within, .glass-input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3.5px rgba(31, 58, 82, 0.08), 0 4px 15px rgba(31, 58, 82, 0.04);
+    background: #ffffff;
+  }
+  .workspace-container.dark .glass-input:focus-within, .workspace-container.dark .glass-input:focus {
+    box-shadow: 0 0 0 3.5px rgba(59, 130, 246, 0.16), 0 4px 18px rgba(0, 0, 0, 0.25);
+    background: rgba(15, 20, 35, 0.75);
+    border-color: #3b82f6;
   }
   
+  /* Ethereal Floating Background Nebulas */
   .bg-radial-glow {
     position: absolute;
-    top: -30%;
-    left: -30%;
-    width: 160%;
-    height: 160%;
+    top: -20%;
+    left: -20%;
+    width: 140%;
+    height: 140%;
     z-index: 1;
-    background: 
-      radial-gradient(circle at 20% 30%, rgba(0, 113, 227, 0.03) 0%, transparent 40%),
-      radial-gradient(circle at 80% 70%, rgba(255, 149, 0, 0.02) 0%, transparent 40%);
+    background:
+      radial-gradient(circle at 15% 25%, rgba(31, 58, 82, 0.05) 0%, transparent 45%),
+      radial-gradient(circle at 85% 75%, rgba(144, 27, 47, 0.04) 0%, transparent 45%);
     pointer-events: none;
-    mix-blend-mode: multiply;
+    animation: nebulaFloat 20s ease-in-out infinite;
   }
+  .workspace-container.dark .bg-radial-glow {
+    background:
+      radial-gradient(circle at 15% 25%, rgba(59, 130, 246, 0.07) 0%, transparent 45%),
+      radial-gradient(circle at 85% 75%, rgba(144, 27, 47, 0.05) 0%, transparent 45%),
+      radial-gradient(circle at 50% 50%, rgba(139, 92, 246, 0.03) 0%, transparent 55%);
+  }
+
   .hall-grid {
     display: grid;
-    grid-template-columns: 1.2fr 1fr;
-    gap: 20px;
+    grid-template-columns: 1.25fr 1fr;
+    gap: 24px;
   }
   @media (max-width: 860px) {
-    .hall-grid {
-      grid-template-columns: 1fr;
-    }
+    .hall-grid { grid-template-columns: 1fr; }
   }
 
-  /* Brite Workspace Layout Classes */
+  /* Core CRM macOS-like Layout Container */
   .workspace-container {
     display: flex;
-    min-height: 100vh;
-    width: 100vw;
-    background: #f0f0f5;
+    height: 100%;
+    width: 100%;
+    max-width: 100vw;
+    background: #f8fafc;
+    color: var(--text-primary);
     position: relative;
     overflow: hidden;
-    transition: background 0.25s;
-  }
-  .workspace-container.dark {
-    background: #0f0f14;
+    transition: background 0.3s ease, color 0.3s ease;
+
+    /* Light Mode CSS Variables — Refined Palette */
+    --text-primary: #0f172a;
+    --text-secondary: #475569;
+    --text-tertiary: #94a3b8;
+    --bg-sidebar: #1F3A52;
+    --border-sidebar: transparent;
+    --border-color: rgba(31, 58, 82, 0.05);
+    --item-hover: rgba(31, 58, 82, 0.05);
+    --item-hover-soft: rgba(31, 58, 82, 0.02);
+    --item-hover-more: rgba(31, 58, 82, 0.09);
+    --item-active: #1F3A52;
+    --item-active-text: #ffffff;
+    --sidebar-header-border: rgba(31, 58, 82, 0.05);
+    --sidebar-dot-border: #1F3A52;
+    --accent: #1F3A52;
   }
 
+  .workspace-container.dark {
+    background: #070913;
+
+    /* Dark Mode CSS Variables — Cosmic Obsidian Space */
+    --text-primary: #f8fafc;
+    --text-secondary: #94a3b8;
+    --text-tertiary: #475569;
+    --bg-sidebar: #0b0e1a;
+    --border-sidebar: transparent;
+    --border-color: rgba(255, 255, 255, 0.07);
+    --item-hover: rgba(255, 255, 255, 0.06);
+    --item-hover-soft: rgba(255, 255, 255, 0.03);
+    --item-hover-more: rgba(255, 255, 255, 0.12);
+    --item-active: #0f1423;
+    --item-active-text: #f8fafc;
+    --sidebar-header-border: rgba(255, 255, 255, 0.07);
+    --sidebar-dot-border: #0b0e1a;
+    --accent: #3b82f6;
+  }
+
+  /* Elegant Frosted Translucent Sidebar */
   .sidebar-permanent {
-    width: 220px;
-    min-width: 220px;
-    background: #16161e;
-    border-right: 1px solid rgba(255,255,255,0.06);
+    width: 230px;
+    min-width: 230px;
+    flex-shrink: 0;
+    background: linear-gradient(180deg, rgba(20, 36, 54, 0.96) 0%, rgba(10, 18, 30, 0.98) 100%);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-right: 1px solid rgba(255, 255, 255, 0.06);
     display: flex;
     flex-direction: column;
-    height: 100vh;
+    height: 100%;
     position: sticky;
     top: 0;
     z-index: 100;
-    transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+    overflow-x: hidden;
+    /* Override sidebar tokens to match its permanent dark styling */
+    --text-primary: #f8fafc;
+    --text-secondary: rgba(255, 255, 255, 0.65);
+    --text-tertiary: rgba(255, 255, 255, 0.38);
+    --border-color: rgba(255, 255, 255, 0.08);
+    --item-hover: rgba(255, 255, 255, 0.08);
+    --item-hover-soft: rgba(255, 255, 255, 0.04);
+    --item-hover-more: rgba(255, 255, 255, 0.14);
+    --item-active: rgba(255, 255, 255, 0.14);
+    --item-active-text: #ffffff;
+    --sidebar-header-border: rgba(255, 255, 255, 0.08);
+    --sidebar-dot-border: #142436;
+  }
+  .workspace-container.dark .sidebar-permanent {
+    background: linear-gradient(180deg, rgba(11, 14, 26, 0.97) 0%, rgba(5, 6, 12, 0.99) 100%);
+    --sidebar-dot-border: #0b0e1a;
+  }
+
+  .sidebar-brand-title {
+    font-size: 15.5px;
+    font-weight: 800;
+    color: #f8fafc;
+    letter-spacing: -0.015em;
+    font-family: 'Outfit', sans-serif;
+  }
+  .sidebar-brand-subtitle {
+    font-size: 9.5px;
+    color: rgba(255,255,255,0.45);
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .sidebar-section-header {
+    font-size: 10px;
+    color: rgba(255,255,255,0.36);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    padding-left: 10px;
+    margin-bottom: 5px;
+    margin-top: 16px;
+    display: block;
+  }
+
+  .sidebar-nav-btn {
+    width: 100%;
+    padding: 10px 14px;
+    border-radius: 9px;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 13.5px;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+    text-align: left;
+    letter-spacing: -0.01em;
+    position: relative;
+  }
+  .sidebar-nav-btn:hover {
+    background: var(--item-hover);
+    color: var(--text-primary);
+    transform: translateX(3px) scale(1.015);
+  }
+  /* Elegant blend of Corporate Red and Corporate Blue */
+  .sidebar-nav-btn.active {
+    background: linear-gradient(135deg, #901B2F 0%, #1F3A52 100%) !important;
+    box-shadow: 0 4px 15px rgba(144, 27, 47, 0.25);
+    color: #ffffff !important;
+    font-weight: 600;
+  }
+  .sidebar-nav-btn.active::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 20%;
+    bottom: 20%;
+    width: 3.5px;
+    background: #ffffff;
+    border-radius: 0 3px 3px 0;
+  }
+
+  .sidebar-connection-btn {
+    width: 100%;
+    padding: 9px 12px;
+    border-radius: 8px;
+    background: transparent;
+    border: none;
+    color: rgba(255,255,255,0.55);
+    font-size: 12.5px;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    cursor: pointer;
+    text-align: left;
+  }
+  .sidebar-connection-btn:hover {
+    background: rgba(255,255,255,0.06);
+    color: rgba(255,255,255,0.85);
+    transform: translateX(2px);
+  }
+
+  .sidebar-assistant-chip {
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 10px;
+    padding: 8px 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+  }
+  .sidebar-assistant-chip:hover {
+    background: rgba(255,255,255,0.1);
+    transform: translateY(-2px) scale(1.02);
+  }
+
+  .sidebar-profile-chip {
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 10px;
+    padding: 8px 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .sidebar-api-btn {
+    width: 100%;
+    padding: 8px 12px;
+    border-radius: 8px;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.08);
+    color: rgba(255,255,255,0.6);
+    font-size: 11px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    cursor: pointer;
+  }
+  .sidebar-api-btn:hover {
+    background: rgba(255,255,255,0.1);
+    color: rgba(255,255,255,0.9);
+    transform: translateY(-1px);
   }
 
   .main-content-pane {
     flex: 1;
-    height: 100vh;
+    min-width: 0;
+    height: 100%;
     overflow-y: auto;
+    overflow-x: hidden;
     display: flex;
     flex-direction: column;
     position: relative;
-    background: #f0f0f5;
-    transition: background 0.25s;
+    background: #f8fafc;
   }
   .workspace-container.dark .main-content-pane {
-    background: #0f0f14;
+    background: #070913;
   }
 
-  /* Topbar dark mode */
   .workspace-container.dark .topbar-header {
-    background: #16161e !important;
-    border-bottom-color: rgba(255,255,255,0.07) !important;
+    background: rgba(7, 9, 19, 0.96) !important;
+    border-bottom-color: rgba(255, 255, 255, 0.07) !important;
   }
 
-  /* AI sidebar dark mode */
-  .workspace-container.dark .ai-sidebar {
-    background: #1a1a24;
-    border-left-color: rgba(255,255,255,0.07);
+  /* Premium Glassmorphic AI Panel Drawer */
+  .ai-panel-overlay {
+    position: fixed; inset: 0; z-index: 998;
+    background: rgba(0,0,0,0.32);
+    backdrop-filter: blur(5px);
+    -webkit-backdrop-filter: blur(5px);
+    animation: fadeOverlay 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  @keyframes fadeOverlay { from { opacity: 0; } to { opacity: 1; } }
+
+  .ai-panel {
+    position: fixed; top: 0; right: 0; bottom: 0;
+    width: 350px; max-width: 100vw;
+    z-index: 999;
+    background: rgba(255, 255, 255, 0.88);
+    backdrop-filter: blur(28px) saturate(185%);
+    -webkit-backdrop-filter: blur(28px) saturate(185%);
+    border-left: 1px solid rgba(31, 58, 82, 0.08);
+    display: flex; flex-direction: column; overflow: hidden;
+    box-shadow: -10px 0 45px rgba(31, 58, 82, 0.14);
+    animation: slideInPanel 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .workspace-container.dark .ai-panel {
+    background: rgba(15, 20, 35, 0.95);
+    border-left-color: rgba(255, 255, 255, 0.07);
+    box-shadow: -10px 0 50px rgba(0, 0, 0, 0.5);
+  }
+  @keyframes slideInPanel {
+    from { transform: translateX(350px); }
+    to   { transform: translateX(0); }
   }
 
-  /* AI Sidebar — barra lateral derecha permanente */
-  .ai-sidebar {
-    width: 300px;
-    min-width: 300px;
-    height: 100vh;
-    position: sticky;
-    top: 0;
-    background: rgba(255, 255, 255, 0.82);
-    backdrop-filter: blur(25px);
-    -webkit-backdrop-filter: blur(25px);
-    border-left: 1px solid rgba(0, 0, 0, 0.07);
-    display: flex;
-    flex-direction: column;
+  /* Stunning Siri-like AI floating trigger */
+  @keyframes fabFloat {
+    0%,100% { transform: translateY(0px); }
+    50%     { transform: translateY(-7px); }
+  }
+  @keyframes fabGlow {
+    0%,100% { box-shadow: 0 8px 30px rgba(31, 58, 82, 0.35), 0 2px 10px rgba(0,0,0,0.12), 0 0 0 0 rgba(139, 92, 246, 0.2); }
+    50%     { box-shadow: 0 14px 38px rgba(144, 27, 47, 0.45), 0 4px 18px rgba(0,0,0,0.16), 0 0 0 8px rgba(144, 27, 47, 0); }
+  }
+  @keyframes fabShimmer {
+    0%   { background-position: -200% center; }
+    100% { background-position: 200% center; }
+  }
+  .ai-fab {
+    position: fixed; bottom: 28px; right: 28px; z-index: 997;
+    height: 50px; padding: 0 22px 0 16px;
+    border-radius: 99px;
+    background: linear-gradient(120deg, #901B2F 0%, #1F3A52 40%, #8B5CF6 80%, #6366f1 100%);
+    background-size: 200% auto;
+    border: none; cursor: pointer;
+    display: flex; align-items: center; gap: 10px;
+    box-shadow: 0 8px 30px rgba(31, 58, 82, 0.35), 0 2px 10px rgba(0,0,0,0.12);
+    animation: fabFloat 3.5s ease-in-out infinite, fabGlow 3.5s ease-in-out infinite;
     overflow: hidden;
-    z-index: 50;
   }
-  @keyframes slideInSidebar {
-    from { transform: translateX(300px); opacity: 0; }
-    to   { transform: translateX(0);     opacity: 1; }
+  .ai-fab::before {
+    content: "";
+    position: absolute; inset: 0; border-radius: 99px;
+    background: linear-gradient(120deg, transparent 30%, rgba(255,255,255,0.2) 50%, transparent 70%);
+    background-size: 200% auto;
+    animation: fabShimmer 3s linear infinite;
   }
+  .ai-fab:hover {
+    transform: translateY(-4px) scale(1.06);
+    box-shadow: 0 16px 42px rgba(31, 58, 82, 0.45), 0 5px 20px rgba(0,0,0,0.2);
+    animation: none;
+  }
+  .ai-fab:active { transform: scale(0.97); animation: none; }
 
-  /* Drawer Deslizante estilo Brite */
+  /* Premium Drawer Panel */
   .drawer-backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.15);
+    background: rgba(0, 0, 0, 0.24);
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
     z-index: 900;
-    animation: fadeIn 0.3s ease;
+    animation: fadeIn 0.35s cubic-bezier(0.16, 1, 0.3, 1);
   }
   
   .drawer-panel {
@@ -339,16 +625,21 @@ const css = `
     top: 0;
     right: 0;
     bottom: 0;
-    width: 440px;
-    background: rgba(255, 255, 255, 0.85);
-    backdrop-filter: blur(35px);
-    -webkit-backdrop-filter: blur(35px);
-    border-left: 1px solid rgba(0, 0, 0, 0.08);
-    box-shadow: -15px 0 45px rgba(0, 0, 0, 0.08);
+    width: 480px;
+    background: rgba(255, 255, 255, 0.94);
+    backdrop-filter: blur(28px) saturate(185%);
+    -webkit-backdrop-filter: blur(28px) saturate(185%);
+    border-left: 1px solid rgba(31, 58, 82, 0.08);
+    box-shadow: -10px 0 45px rgba(31, 58, 82, 0.12);
     display: flex;
     flex-direction: column;
     z-index: 1000;
-    animation: slideLeft 0.38s cubic-bezier(0.16, 1, 0.3, 1);
+    animation: slideLeft 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .workspace-container.dark .drawer-panel {
+    background: rgba(15, 20, 35, 0.96);
+    border-left: 1px solid rgba(255, 255, 255, 0.07);
+    box-shadow: -10px 0 45px rgba(0, 0, 0, 0.45);
   }
   
   @keyframes slideLeft {
@@ -356,33 +647,431 @@ const css = `
     to { transform: translateX(0); }
   }
 
-  /* Sidebar responsivo para móviles */
-  .mobile-hamburger-btn {
-    display: none;
-  }
-  .mobile-close-btn {
-    display: none;
-  }
+  .mobile-hamburger-btn { display: none; }
+  .mobile-close-btn { display: none; }
 
   @media (max-width: 900px) {
     .sidebar-permanent {
       position: fixed;
       left: -280px;
       height: 100vh;
-      box-shadow: 10px 0 30px rgba(0,0,0,0.06);
+      box-shadow: 10px 0 35px rgba(0,0,0,0.12);
     }
-    .sidebar-permanent.open {
-      left: 0;
+    .sidebar-permanent.open { left: 0; }
+    .drawer-panel { width: 100%; }
+    .mobile-hamburger-btn { display: flex !important; }
+    .mobile-close-btn { display: block !important; }
+  }
+
+  /* Cinematic Global Apple Navigation Bar */
+  .apple-nav-banner {
+    position: sticky !important;
+    top: 0;
+    z-index: 1000;
+    height: 58px !important;
+    padding: 0 32px !important;
+    background: rgba(255, 255, 255, 0.82) !important;
+    backdrop-filter: blur(20px) saturate(185%) !important;
+    -webkit-backdrop-filter: blur(20px) saturate(185%) !important;
+    border-bottom: 1px solid rgba(31, 58, 82, 0.06) !important;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .workspace-container.dark .apple-nav-banner {
+    background: rgba(7, 9, 19, 0.82) !important;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07) !important;
+  }
+
+  /* Hero Banner */
+  .apple-hero-container {
+    text-align: left;
+    padding: 0 0 28px;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    border-radius: 0;
+    margin-bottom: 0;
+  }
+  .apple-hero-title {
+    font-size: 28px !important;
+    font-weight: 850 !important;
+    letter-spacing: -0.035em !important;
+    line-height: 1.25 !important;
+    margin: 0 0 4px;
+    color: var(--text-primary);
+    font-family: 'Outfit', sans-serif !important;
+  }
+  .apple-hero-subtitle {
+    font-size: 13.5px !important;
+    font-weight: 500 !important;
+    line-height: 1.45 !important;
+    color: var(--text-secondary);
+    max-width: 580px;
+    margin: 0 0 8px;
+  }
+  .apple-hero-clock {
+    font-size: 13.5px !important;
+    font-weight: 600 !important;
+    color: var(--text-tertiary) !important;
+  }
+
+  /* Tactile Bento Grid & Cards */
+  .apple-card-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 24px;
+    margin-bottom: 40px;
+  }
+  @media (max-width: 1024px) {
+    .apple-card-grid { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media (max-width: 768px) {
+    .apple-card-grid { grid-template-columns: 1fr; }
+  }
+
+  .apple-card {
+    background: #ffffff;
+    border: 1px solid rgba(31, 58, 82, 0.05);
+    border-radius: 20px;
+    padding: 24px;
+    box-shadow: 0 4px 18px rgba(31, 58, 82, 0.02);
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    overflow: hidden;
+  }
+  .apple-card:hover {
+    transform: translateY(-5px) scale(1.015);
+    box-shadow: 0 12px 30px rgba(31, 58, 82, 0.08), 0 0 15px rgba(31, 58, 82, 0.03);
+    border-color: rgba(31, 58, 82, 0.12);
+  }
+  .workspace-container.dark .apple-card {
+    background: rgba(15, 20, 35, 0.65);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    box-shadow: none;
+  }
+  .workspace-container.dark .apple-card:hover {
+    box-shadow: 0 14px 40px rgba(0, 0, 0, 0.45), 0 0 20px rgba(59, 130, 246, 0.10);
+    border-color: rgba(255, 255, 255, 0.14);
+  }
+
+  /* Apple Card Dark / Accent styled */
+  .apple-card-dark {
+    background: #ffffff !important;
+    border: 1px solid rgba(31, 58, 82, 0.06) !important;
+    border-radius: 20px;
+    padding: 24px;
+    color: #0f172a !important;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    overflow: hidden;
+    box-shadow: 0 4px 18px rgba(31, 58, 82, 0.02);
+  }
+  .apple-card-dark:hover {
+    transform: translateY(-5px) scale(1.015);
+    box-shadow: 0 12px 30px rgba(31, 58, 82, 0.08), 0 0 15px rgba(31, 58, 82, 0.03);
+    border-color: rgba(31, 58, 82, 0.12) !important;
+  }
+  .apple-card-dark h1, .apple-card-dark h2, .apple-card-dark h3, .apple-card-dark h4, .apple-card-dark h5 {
+    color: #0f172a !important;
+  }
+  .workspace-container.dark .apple-card-dark {
+    background: rgba(15, 20, 35, 0.65) !important;
+    border: 1px solid rgba(255, 255, 255, 0.07) !important;
+    color: #f8fafc !important;
+  }
+  .workspace-container.dark .apple-card-dark h1,
+  .workspace-container.dark .apple-card-dark h2,
+  .workspace-container.dark .apple-card-dark h3,
+  .workspace-container.dark .apple-card-dark h4,
+  .workspace-container.dark .apple-card-dark h5 {
+    color: #f8fafc !important;
+  }
+  .workspace-container.dark .apple-card-dark:hover {
+    box-shadow: 0 14px 40px rgba(0, 0, 0, 0.45), 0 0 20px rgba(59, 130, 246, 0.10);
+    border-color: rgba(255, 255, 255, 0.14) !important;
+  }
+
+  /* Subtle Gradient Card */
+  .apple-card-gradient {
+    background: linear-gradient(135deg, #f8fafc 0%, #eef2f6 100%) !important;
+    border: 1px solid rgba(31, 58, 82, 0.05) !important;
+    border-radius: 22px;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    overflow: hidden;
+  }
+  .apple-card-gradient:hover {
+    transform: scale(1.02) translateY(-4px);
+    box-shadow: 0 14px 40px rgba(31, 58, 82, 0.08);
+    border-color: rgba(31, 58, 82, 0.1) !important;
+  }
+  .workspace-container.dark .apple-card-gradient {
+    background: linear-gradient(135deg, #101424 0%, #070913 100%) !important;
+    border-color: rgba(255, 255, 255, 0.07) !important;
+  }
+
+  .apple-link-arrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--accent);
+    font-size: 13.5px;
+    font-weight: 600;
+    text-decoration: none;
+    cursor: pointer;
+  }
+  .apple-link-arrow:hover {
+    color: var(--text-primary);
+  }
+  .apple-link-arrow::after {
+    content: " ›";
+    font-size: 16px;
+    font-weight: 800;
+    line-height: 1;
+    transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .apple-link-arrow:hover::after {
+    transform: translateX(4px);
+  }
+
+  .apple-btn-pill {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 9px 18px;
+    border-radius: 99px;
+    font-size: 12.5px;
+    font-weight: 600;
+    cursor: pointer;
+    text-align: center;
+    border: none;
+    background-color: var(--accent);
+    color: #ffffff;
+  }
+  .apple-btn-pill:hover {
+    filter: brightness(1.12);
+    transform: translateY(-2px) scale(1.03);
+    box-shadow: 0 4px 12px rgba(31, 58, 82, 0.15);
+  }
+
+  .apple-btn-pill-secondary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 9px 18px;
+    border-radius: 99px;
+    font-size: 12.5px;
+    font-weight: 600;
+    cursor: pointer;
+    text-align: center;
+    border: none;
+    background-color: rgba(31, 58, 82, 0.05);
+    color: var(--text-primary);
+  }
+  .apple-btn-pill-secondary:hover {
+    background-color: rgba(31, 58, 82, 0.09);
+    transform: translateY(-1.5px) scale(1.02);
+  }
+  .workspace-container.dark .apple-btn-pill-secondary {
+    background-color: rgba(255, 255, 255, 0.08);
+    color: #ffffff;
+  }
+  .workspace-container.dark .apple-btn-pill-secondary:hover {
+    background-color: rgba(255, 255, 255, 0.14);
+  }
+
+  .apple-badge {
+    background: rgba(31, 58, 82, 0.05);
+    color: var(--text-secondary);
+    border: 1px solid rgba(31, 58, 82, 0.10);
+    border-radius: 99px;
+    padding: 3px 12px;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .workspace-container.dark .apple-badge {
+    background: rgba(255, 255, 255, 0.06);
+    border-color: rgba(255, 255, 255, 0.12);
+    color: rgba(255, 255, 255, 0.7);
+  }
+
+  /* Refined Quick Action Cards */
+  .apple-quick-action {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 22px;
+    background: #ffffff;
+    border-radius: 20px;
+    box-shadow: 0 4px 18px rgba(31, 58, 82, 0.02);
+    border: 1px solid rgba(31, 58, 82, 0.06);
+    cursor: pointer;
+    text-align: left;
+    width: 100%;
+  }
+  .apple-quick-action:hover {
+    transform: translateY(-4px) scale(1.02);
+    box-shadow: 0 12px 30px rgba(31, 58, 82, 0.08), 0 0 15px rgba(31, 58, 82, 0.03);
+    border-color: rgba(31, 58, 82, 0.12);
+  }
+  .workspace-container.dark .apple-quick-action {
+    background: rgba(15, 20, 35, 0.65);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    box-shadow: none;
+  }
+  .workspace-container.dark .apple-quick-action:hover {
+    box-shadow: 0 14px 40px rgba(0, 0, 0, 0.45);
+    border-color: rgba(255, 255, 255, 0.14);
+  }
+  .apple-quick-action-icon {
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .apple-quick-action:hover .apple-quick-action-icon {
+    transform: scale(1.1) rotate(2deg);
+  }
+
+  .apple-divider {
+    height: 1px;
+    background: rgba(31, 58, 82, 0.06);
+    margin: 18px 0;
+  }
+  .workspace-container.dark .apple-divider {
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  .apple-progress-bar {
+    width: 100%;
+    height: 6px;
+    border-radius: 99px;
+    background: rgba(31, 58, 82, 0.05);
+    overflow: hidden;
+  }
+  .workspace-container.dark .apple-progress-bar {
+    background: rgba(255, 255, 255, 0.08);
+  }
+  .apple-progress-fill {
+    height: 100%;
+    border-radius: 99px;
+    background: var(--accent);
+    transition: width 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  html, #root {
+    height: 100%;
+    overflow: hidden;
+  }
+
+  @media (max-width: 660px) {
+    .apple-nav-banner { padding: 0 16px !important; }
+    .topbar-search-box { display: none !important; }
+  }
+  @media (max-width: 500px) {
+    .topbar-ai-badge { display: none !important; }
+    .apple-nav-banner h1 { font-size: 16px !important; }
+  }
+
+  .topbar-left h1 {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+  }
+
+  .main-content-pane {
+    min-width: 0;
+    overflow-x: hidden;
+  }
+
+  .apple-bento-main { grid-row: span 2; }
+  @media (max-width: 768px) {
+    .apple-bento-main { grid-row: span 1 !important; }
+    .apple-card-grid { gap: 16px; }
+  }
+
+  .dash-quick-grid {
+    display: grid;
+    gap: 16px;
+    grid-template-columns: repeat(4, 1fr);
+  }
+  @media (max-width: 860px) {
+    .dash-quick-grid { grid-template-columns: repeat(2, 1fr); }
+  }
+
+  @media (max-width: 520px) {
+    .apple-hero-title {
+      font-size: 20px !important;
+      padding-right: 120px !important;
     }
-    .drawer-panel {
-      width: 100%;
+    .apple-hero-container { padding-bottom: 40px; }
+  }
+
+  @media (max-width: 860px) {
+    .correos-right-panel { display: none !important; }
+  }
+
+  .view-scroll-pad {
+    padding-left: clamp(16px, 4vw, 48px) !important;
+    padding-right: clamp(16px, 4vw, 48px) !important;
+    padding-top: clamp(16px, 3.5vw, 40px) !important;
+  }
+
+  .sidebar-permanent { overflow-x: hidden; }
+
+  @media (max-width: 480px) {
+    .ai-fab {
+      bottom: 20px;
+      right: 20px;
+      height: 44px;
+      padding: 0 16px 0 12px;
+      font-size: 12px;
     }
-    .mobile-hamburger-btn {
-      display: flex !important;
-    }
-    .mobile-close-btn {
-      display: block !important;
-    }
+  }
+
+  .fin-top-grid {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: 24px;
+    align-items: stretch;
+  }
+  .fin-bottom-grid {
+    display: grid;
+    grid-template-columns: 7fr 5fr;
+    gap: 24px;
+    align-items: start;
+  }
+  @media (max-width: 860px) {
+    .fin-top-grid, .fin-bottom-grid { grid-template-columns: 1fr; }
+  }
+
+  @media (max-width: 480px) {
+    .modal-2col { grid-template-columns: 1fr !important; }
+  }
+
+  .search-result-item { transition: background 0.15s ease; }
+  .search-result-item:hover {
+    background: rgba(31, 58, 82, 0.05) !important;
+  }
+  .workspace-container.dark .search-result-item:hover {
+    background: rgba(255, 255, 255, 0.06) !important;
   }
 `;
 
@@ -392,12 +1081,66 @@ function uid() { return Math.random().toString(36).slice(2, 9); }
 function timeAgo(iso) {
   const d = (Date.now() - new Date(iso)) / 1000;
   if (d < 60) return "ahora";
-  if (d < 3600) return `${Math.floor(d/60)}m`;
-  if (d < 86400) return `${Math.floor(d/3600)}h`;
-  return `${Math.floor(d/86400)}d`;
+  if (d < 3600) return `${Math.floor(d / 60)}m`;
+  if (d < 86400) return `${Math.floor(d / 3600)}h`;
+  return `${Math.floor(d / 86400)}d`;
 }
 function fmtTime(iso) {
   return new Date(iso).toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" });
+}
+
+function safeMessageText(content) {
+  if (content === null || content === undefined) return "";
+  if (typeof content === "string") return content;
+  if (typeof content === "number" || typeof content === "boolean") return String(content);
+  if (Array.isArray(content)) {
+    return content.map(safeMessageText).filter(Boolean).join("\n");
+  }
+  if (typeof content === "object") {
+    if (typeof content.respuesta === "string") return content.respuesta;
+    if (typeof content.message === "string") return content.message;
+    if (typeof content.text === "string") return content.text;
+    try { return JSON.stringify(content, null, 2); } catch { return "[Mensaje no legible]"; }
+  }
+  return String(content);
+}
+
+class AssistantErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+
+  componentDidCatch(error, info) {
+    console.error("Assistant panel crashed:", error, info);
+  }
+
+  componentDidUpdate(prevProps) {
+    if (this.state.error && prevProps.resetKey !== this.props.resetKey) {
+      this.setState({ error: null });
+    }
+  }
+
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <button
+        className="ai-fab"
+        onClick={this.props.onRecover}
+        title="Reiniciar Asistente IA"
+        style={{ background: "linear-gradient(120deg, #901B2F, #dc2626)" }}
+      >
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", lineHeight: 1.15 }}>
+          <span style={{ fontSize: 13, fontWeight: 800, color: "#fff", whiteSpace: "nowrap" }}>Asistente IA</span>
+          <span style={{ fontSize: 9.5, fontWeight: 500, color: "rgba(255,255,255,0.72)", whiteSpace: "nowrap" }}>Reiniciar panel</span>
+        </div>
+      </button>
+    );
+  }
 }
 
 // ── Gemini Web Search ──────────────────────────────────────────────────────
@@ -447,7 +1190,7 @@ async function searchWithGemini(messages, apiKey) {
 
 // ── Gemini API ─────────────────────────────────────────────────────────────
 // Construye un snapshot de contexto de la app para inyectar en el prompt del Asistente Personal
-function buildContextSnapshot(items) {
+function buildContextSnapshot(items, appContext = {}) {
   const ahora = new Date();
   const hoyStr = ahora.toISOString().slice(0, 10);
   const mesStr = ahora.toISOString().slice(0, 7);
@@ -457,20 +1200,23 @@ function buildContextSnapshot(items) {
   const notas = items.filter(i => i.tipo === "nota");
   const gastos = items.filter(i => i.tipo === "gasto");
   const reuniones = items.filter(i => i.tipo === "reunion");
+  const crm = appContext.crm || { clients: [], projects: [], quotes: [] };
+  const gmailLive = appContext.gmailEmails || [];
+  const gmailToken = appContext.gmailToken;
 
-  const hoy = tareas.filter(t => t.fecha?.slice(0,10) === hoyStr);
-  const vencidas = tareas.filter(t => t.fecha && t.fecha.slice(0,10) < hoyStr);
-  const proximas = tareas.filter(t => t.fecha && t.fecha.slice(0,10) > hoyStr).slice(0, 5);
+  const hoy = tareas.filter(t => t.fecha?.slice(0, 10) === hoyStr);
+  const vencidas = tareas.filter(t => t.fecha && t.fecha.slice(0, 10) < hoyStr);
+  const proximas = tareas.filter(t => t.fecha && t.fecha.slice(0, 10) > hoyStr).slice(0, 5);
   const gastosMes = gastos.filter(g => g.creado?.startsWith(mesStr));
   const totalGastosMes = gastosMes.reduce((s, g) => s + (Number(g.datos?.monto) || 0), 0);
 
   const fmtItem = (i) => {
     const t = i.datos?.titulo || i.texto || "Sin título";
-    const f = i.fecha ? ` [${i.fecha.slice(0,10)}${i.datos?.hora ? " " + i.datos.hora : ""}]` : "";
+    const f = i.fecha ? ` [${i.fecha.slice(0, 10)}${i.datos?.hora ? " " + i.datos.hora : ""}]` : "";
     return `• [ID:${i.id}] ${t}${f}`;
   };
 
-  let ctx = `\n\n--- CONTEXTO ACTUAL DEL SISTEMA (${ahora.toLocaleDateString("es-CO", { weekday:"long", day:"numeric", month:"long", year:"numeric" })}) ---\n`;
+  let ctx = `\n\n--- CONTEXTO ACTUAL DEL SISTEMA (${ahora.toLocaleDateString("es-CO", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}) ---\n`;
 
   ctx += `\nTAREAS PENDIENTES (${tareas.length} total):`;
   if (hoy.length) ctx += `\n  Hoy (${hoy.length}):\n${hoy.map(fmtItem).join("\n")}`;
@@ -479,15 +1225,21 @@ function buildContextSnapshot(items) {
   if (!tareas.length) ctx += "\n  (sin tareas pendientes)";
 
   if (recordatorios.length) {
-    ctx += `\n\nRECORDATORIOS ACTIVOS (${recordatorios.length}):\n${recordatorios.slice(0,5).map(fmtItem).join("\n")}`;
+    ctx += `\n\nRECORDATORIOS ACTIVOS (${recordatorios.length}):\n${recordatorios.slice(0, 5).map(fmtItem).join("\n")}`;
   }
 
   if (notas.length) {
-    ctx += `\n\nNOTAS RECIENTES (${notas.length} total):\n${notas.slice(0,5).map(n => `• ${n.datos?.titulo || n.texto || "Sin título"}`).join("\n")}`;
+    ctx += `\n\nNOTAS RECIENTES (${notas.length} total):\n${notas.slice(0, 5).map(n => `• ${n.datos?.titulo || n.texto || "Sin título"}`).join("\n")}`;
   }
 
   if (reuniones.length) {
-    ctx += `\n\nREUNIONES REGISTRADAS (${reuniones.length}):\n${reuniones.slice(0,3).map(r => `• ${r.datos?.titulo || r.texto || "Sin título"}`).join("\n")}`;
+    ctx += `\n\nREUNIONES REGISTRADAS (${reuniones.length}):\n${reuniones.slice(0, 3).map(r => `• ${r.datos?.titulo || r.texto || "Sin título"}`).join("\n")}`;
+    const accionesReunion = reuniones
+      .flatMap(r => (r.resumen?.acciones || []).map(a => ({ reunion: r.titulo || r.texto, ...a })))
+      .slice(0, 8);
+    if (accionesReunion.length) {
+      ctx += `\nACCIONES DETECTADAS EN REUNIONES:\n${accionesReunion.map(a => `• ${a.tarea}${a.responsable ? ` — ${a.responsable}` : ""}${a.fecha ? ` (${a.fecha})` : ""} [Reunión: ${a.reunion}]`).join("\n")}`;
+    }
   }
 
   ctx += `\n\nFINANZAS:\n  Gastos este mes: $${totalGastosMes.toLocaleString("es-CO")} COP (${gastosMes.length} registros)`;
@@ -503,35 +1255,106 @@ function buildContextSnapshot(items) {
       if (eventosHoy.length) ctx += `\n  Hoy: ${eventosHoy.map(e => `${e.titulo}${e.horaInicio ? " a las " + e.horaInicio : ""}`).join(", ")}`;
       if (eventosFuturos.length) ctx += `\n  Próximos: ${eventosFuturos.map(e => `${e.titulo} (${e.fecha})`).join(", ")}`;
     }
-  } catch {}
+  } catch { }
 
   // Sincronización de Google Workspace (Gmail + Google Calendar) del correo autorizado
   const isGoogleConnected = localStorage.getItem("cerebro_google_connected") === "true";
   const googleEmail = localStorage.getItem("cerebro_google_email") || "";
 
   if (isGoogleConnected && googleEmail) {
-    const wsData = getDynamicWorkspaceData(googleEmail);
+    const isDemoEmail = ["suelosyestructuras@gmail.com", "javier.ospina@construito.co", "javier.ospina.design@gmail.com"]
+      .includes(googleEmail.toLowerCase().trim()) && !(gmailToken || gmailLive.length > 0);
+
     ctx += `\n\n--- GOOGLE WORKSPACE AUTORIZADO ACTIVO (${googleEmail}) ---`;
     ctx += `\nTienes acceso directo, seguro y autorizado a la cuenta de Google de su titular: ${googleEmail}`;
     ctx += `\nCualquier consulta del Ing. Ospina sobre sus correos o citas debe ser respondida con los siguientes datos del Workspace:`;
 
-    ctx += `\n\n[GOOGLE CALENDAR SYNC - CITAS PARA HOY EN ${googleEmail}]:`;
-    wsData.calendar.forEach(ev => {
-      ctx += `\n  • ${ev.time} - ${ev.title} [Ubicación: ${ev.loc}] (Importado de Google Calendar)`;
-    });
+    if (isDemoEmail) {
+      const wsData = getDynamicWorkspaceData(googleEmail);
+      ctx += `\n\n[GOOGLE CALENDAR SYNC - CITAS PARA HOY EN ${googleEmail}]:`;
+      wsData.calendar.forEach(ev => {
+        ctx += `\n  • ${ev.time} - ${ev.title} [Ubicación: ${ev.loc}] (Importado de Google Calendar)`;
+      });
 
-    ctx += `\n\n[GMAIL SYNC - ÚLTIMOS CORREOS DETECTADOS Y PROCESADOS EN ${googleEmail}]:`;
-    wsData.gmail.forEach(m => {
-      ctx += `\n  • De: ${m.sender}`;
-      ctx += `\n    Recibido: Hoy a las ${m.time} (18 de Mayo de 2026)`;
-      ctx += `\n    Asunto: ${m.subj}`;
-      ctx += `\n    Resumen de Extracción IA: ${m.body} [Estado: ${m.badgeText}]`;
-    });
+      ctx += `\n\n[GMAIL SYNC - ÚLTIMOS CORREOS DETECTADOS Y PROCESADOS EN ${googleEmail}]:`;
+      wsData.gmail.forEach(m => {
+        ctx += `\n  • De: ${m.sender}`;
+        ctx += `\n    Recibido: Hoy a las ${m.time} (18 de Mayo de 2026)`;
+        ctx += `\n    Asunto: ${m.subj}`;
+        ctx += `\n    Resumen de Extracción IA: ${m.body} [Estado: ${m.badgeText}]`;
+      });
+    } else {
+      // EVENTOS DE CALENDARIO REALES DESDE ITEMS DE LA APP
+      const realCalendarItems = items.filter(i => (i.tipo === "tarea" || i.tipo === "recordatorio" || i.tipo === "reunion") && !i.hecho);
+      const todayEvents = realCalendarItems.filter(i => i.fecha && i.fecha.slice(0, 10) === hoyStr);
+      const upcomingEvents = realCalendarItems
+        .filter(i => i.fecha && i.fecha.slice(0, 10) > hoyStr)
+        .sort((a, b) => {
+          const dateA = a.fecha.slice(0, 10);
+          const dateB = b.fecha.slice(0, 10);
+          if (dateA !== dateB) return dateA.localeCompare(dateB);
+          const timeA = a.datos?.hora || a.horaInicio || "";
+          const timeB = b.datos?.hora || b.horaInicio || "";
+          return timeA.localeCompare(timeB);
+        })
+        .slice(0, 5);
+
+      ctx += `\n\n[GOOGLE CALENDAR SYNC - CITAS PARA HOY EN ${googleEmail}]:`;
+      if (todayEvents.length > 0) {
+        todayEvents.forEach(ev => {
+          const timePart = ev.datos?.hora || ev.horaInicio || "Todo el día";
+          const loc = ev.datos?.ubicacion || ev.datos?.lugar || "Sin ubicación";
+          const title = ev.datos?.titulo || ev.texto || "Sin título";
+          ctx += `\n  • ${timePart} - ${title} [Ubicación: ${loc}] (Importado de Google Calendar)`;
+        });
+      } else {
+        ctx += `\n  No hay citas programadas para hoy en tu calendario.`;
+        if (upcomingEvents.length > 0) {
+          ctx += `\n\n[GOOGLE CALENDAR SYNC - PRÓXIMAS CITAS EN ${googleEmail}]:`;
+          upcomingEvents.forEach(ev => {
+            const datePart = ev.fecha ? ev.fecha.slice(0, 10) : "";
+            const timePart = ev.datos?.hora || ev.horaInicio || "Todo el día";
+            const loc = ev.datos?.ubicacion || ev.datos?.lugar || "Sin ubicación";
+            const title = ev.datos?.titulo || ev.texto || "Sin título";
+            ctx += `\n  • ${datePart} a las ${timePart} - ${title} [Ubicación: ${loc}] (Importado de Google Calendar)`;
+          });
+        }
+      }
+
+      ctx += `\n\n[GMAIL SYNC - ÚLTIMOS CORREOS DETECTADOS Y PROCESADOS EN ${googleEmail}]:`;
+      if (gmailLive.length > 0) {
+        gmailLive.slice(0, 12).forEach(m => {
+          const remitente = m.senderName || m.sender || m.senderEmail || "Desconocido";
+          const asunto = m.subj || m.asunto || "Sin asunto";
+          const fecha = m.fecha || m.time || "Hoy";
+          const resumen = m.resumen || m.body || "";
+          const prioridad = m.prioridad || "Normal";
+          ctx += `\n  • De: ${remitente}`;
+          ctx += `\n    Recibido: ${fecha}`;
+          ctx += `\n    Asunto: ${asunto}`;
+          ctx += `\n    Resumen de Extracción IA: ${resumen.slice(0, 300)} [Estado: ${prioridad}]`;
+        });
+      } else {
+        ctx += `\n  No se encontraron correos reales sincronizados de Gmail.`;
+      }
+    }
     ctx += `\n------------------------------------------------------------\n`;
   } else {
     ctx += `\n\n--- GOOGLE WORKSPACE NO AUTORIZADO ---`;
     ctx += `\nEl conector de Google Workspace está actualmente desactivado. Si el Ing. Ospina te consulta sobre sus correos o citas de su calendario de Google, explícale de forma muy atenta, formal y clara que debe autorizar y vincular su dirección de correo electrónico preferida haciendo clic en el botón 'Google Workspace' de la barra lateral izquierda o en la Configuración general (icono de engranaje) para que puedas tener acceso a su información.\n`;
   }
+
+  // Cuentas bancarias — CRÍTICO: la IA necesita los IDs para linkear gastos/ingresos
+  try {
+    const cuentas = JSON.parse(localStorage.getItem("cerebro_bank_accounts") || "[]");
+    if (cuentas.length > 0) {
+      ctx += `\n\nCUENTAS BANCARIAS REGISTRADAS (${cuentas.length}) — usa estos IDs en bankAccountId:\n`;
+      ctx += cuentas.map(a =>
+        `• [CUENTA_ID:${a.id}] "${a.name}" | Saldo: $${(a.currentBalance || 0).toLocaleString("es-CO")} COP | ${a.isPersonal ? "Personal" : "Empresa"}`
+      ).join("\n");
+      ctx += `\nCuando el usuario mencione el nombre de una cuenta (Nequi, Bancolombia, NU, etc.) busca en esta lista y usa su CUENTA_ID como bankAccountId.`;
+    }
+  } catch { }
 
   // Contactos
   const contactosSaved = (() => {
@@ -542,17 +1365,35 @@ function buildContextSnapshot(items) {
     ctx += contactosSaved.map(c => `• ${c.nombre}${c.empresa ? ` (${c.empresa})` : ""} | ${c.email || "sin email"} | ${c.telefono || "sin tel"} | ${c.whatsapp || "sin WhatsApp"}`).join("\n");
   }
 
+  if (crm.clients.length || crm.projects.length || crm.quotes.length) {
+    ctx += `\n\nCRM REAL:`;
+    ctx += `\nCLIENTES (${crm.clients.length}):`;
+    ctx += crm.clients.slice(0, 20).map(c => `\n• [CLIENTE_ID:${c.id}] ${c.name}${c.contactPerson ? ` — ${c.contactPerson}` : ""}${c.contactEmail ? ` | ${c.contactEmail}` : ""}${c.phone ? ` | ${c.phone}` : ""}`).join("");
+    ctx += `\nPROYECTOS (${crm.projects.length}):`;
+    ctx += crm.projects.slice(0, 20).map(p => `\n• [PROYECTO_ID:${p.id}] ${p.name} | ${p.status || "sin estado"} | Entrega: ${p.deadline || "sin fecha"} | Valor: $${Number(p.valueWithoutTax || 0).toLocaleString("es-CO")}`).join("");
+    ctx += `\nCOTIZACIONES (${crm.quotes.length}):`;
+    ctx += crm.quotes.slice(0, 20).map(q => `\n• [COTIZACION_ID:${q.id}] ${q.name} | ${q.status || "sin estado"} | Vence: ${q.validUntil || "sin fecha"} | Valor: $${Number(q.value || 0).toLocaleString("es-CO")}`).join("");
+  }
+
   ctx += "\n--- FIN DEL CONTEXTO ---\n";
   return ctx;
 }
 
-async function askGemini(messages, apiKey, personality, items = []) {
+async function askGemini(messages, apiKey, personality, items = [], aiCfg = null, appContext = {}) {
+  const provider = aiCfg?.provider ?? localStorage.getItem("ai_provider") ?? "gemini";
+  const baseUrl = aiCfg?.baseUrl ?? localStorage.getItem("ai_base_url") ?? "https://openrouter.ai/api/v1";
+  const model = aiCfg?.model ?? localStorage.getItem("ai_model") ?? "";
+
+  // Use the key that matches the active provider
   const geminiKey = apiKey || localStorage.getItem("gemini_api_key") || import.meta.env.VITE_GEMINI_API_KEY || "";
-  
-  if (!geminiKey) {
+  const openaiKey = aiCfg?.apiKey || localStorage.getItem("ai_openai_key") || import.meta.env.VITE_OPENAI_API_KEY || "";
+  const claudeKey = aiCfg?.apiKey || localStorage.getItem("ai_claude_key") || import.meta.env.VITE_CLAUDE_API_KEY || "";
+  const activeKey = provider === "openai" ? openaiKey : provider === "claude" ? claudeKey : geminiKey;
+
+  if (!activeKey) {
     return {
       tipo: "chat",
-      respuesta: "⚠️ Se requiere configurar la clave de API de Gemini. Por favor, haga clic en el botón Configurar en la parte superior para ingresarla.",
+      respuesta: `⚠️ Se requiere configurar la clave de API (${provider === "openai" ? "OpenAI-compatible" : provider === "claude" ? "Claude" : "Gemini"}). Por favor, haga clic en Configurar en la parte superior para ingresarla.`,
       datos: {}
     };
   }
@@ -570,77 +1411,171 @@ async function askGemini(messages, apiKey, personality, items = []) {
   }
 
   // Snapshot de todos los datos de la app para que el Asistente Personal tenga contexto completo
-  const contextSnapshot = buildContextSnapshot(items);
+  const contextSnapshot = buildContextSnapshot(items, appContext);
   const hoyISO = new Date().toISOString().slice(0, 10);
 
-  const systemPrompt = `Eres el Asistente Personal — el asistente cognitivo ejecutivo y sistema de gestión de vida avanzado del Ing. Javier Ospina, Director de Proyectos.
+  const systemPrompt = `Eres el Asistente Personal Ejecutivo — la secretaria ejecutiva digital del Ing. Javier Ospina, Director de Proyectos.
 
-IDENTIDAD Y CAPACIDADES:
+════════════════════════════════════════════════════════
+IDENTIDAD Y TONO
+════════════════════════════════════════════════════════
 - Siempre te diriges al usuario como "Ing. Ospina". Nunca por nombre de pila.
-- Tono formal, ejecutivo, preciso. Sin exclamaciones. Sin relleno.
-- Eres PROACTIVO: priorizas lo urgente, alertas sobre tareas vencidas, anticipas necesidades.
+- Tono formal, ejecutivo, preciso. Sin exclamaciones vacías. Sin relleno.
 - Respondes en español formal neutro.
-- Tienes acceso en tiempo real a los correos electrónicos y eventos de Google Workspace del Ing. Ospina provistos en el snapshot de contexto.
-- Cuando el Ing. Ospina te pida revisar sus correos (por ejemplo, buscar correos de hoy, correos de 8 am a 12 pm, o correos de un remitente específico), consulta el snapshot de Gmail provisto abajo y respóndele de manera afirmativa e inmediata con los detalles de esos correos.
-- NUNCA respondas diciendo que no puedes filtrar correos, que tu funcionalidad no te permite realizar búsquedas en tiempo real, que tienes limitaciones para consultar su Gmail, o que son correos de simulación. Asume que estás conectada en vivo a su Workspace y léele directamente los datos exactos del snapshot como si estuvieras accediendo a su bandeja real.
-- Tienes acceso a internet vía Google Search para información general en tiempo real cuando sea requerida.
 - Estilo activo: ${promptStyle}
+- Tienes acceso completo al contexto real de la app (tareas, notas, gastos, contactos, correos, calendario) provistos en el snapshot de contexto al final de este prompt.
+- Cuando el Ing. Ospina pida revisar correos, consulta el snapshot de Gmail y responde con los datos exactos como si estuvieras conectada en vivo a su Workspace. NUNCA digas que no puedes filtrar correos o que tienes limitaciones.
 
-ACCESO TOTAL A LA APP — tienes visibilidad completa de:
-• TAREAS: puedes crear, recordar, priorizar y hacer seguimiento de todas las tareas.
-• NOTAS: puedes referenciar notas existentes y crear nuevas.
-• CALENDARIO: puedes consultar eventos, tareas programadas y recordatorios con fecha.
-• REUNIONES: tienes acceso a los resúmenes y minutas de reuniones grabadas.
-• FINANZAS: conoces los gastos registrados y puedes registrar nuevos.
-• BÚSQUEDA WEB: puedes buscar información actualizada cuando se requiera.
+════════════════════════════════════════════════════════
+⚠️ REGLA ABSOLUTA — NUNCA ACTÚES SIN INFORMACIÓN COMPLETA
+════════════════════════════════════════════════════════
+ANTES de registrar CUALQUIER ítem (tarea, nota, gasto, mensaje, recordatorio), DEBES tener TODOS los campos obligatorios.
+Si FALTA algún dato clave → devuelve tipo "chat" con UNA SOLA PREGUNTA para obtenerlo.
+JAMÁS crees un ítem con información parcial o supuesta. JAMÁS asumas datos que el Ing. Ospina no ha confirmado.
+Solo cuando tengas TODA la información necesaria → registra el ítem con el tipo correcto.
 
-USO DEL CONTEXTO: Al responder, usa activamente los datos del snapshot de contexto al final de este prompt para dar respuestas personalizadas y precisas. Si el Ing. Ospina pregunta "¿qué tengo hoy?" o "¿cómo voy esta semana?", responde con datos reales del contexto.
+REGLA DE ORO: UNA PREGUNTA A LA VEZ. Nunca hagas más de una pregunta en el mismo mensaje.
 
-GESTIÓN PROACTIVA DE VIDA — cuando detectes:
+════════════════════════════════════════════════════════
+📨 FLUJO OBLIGATORIO — MENSAJES Y COMUNICACIONES
+════════════════════════════════════════════════════════
+Cuando el Ing. Ospina quiera "enviar mensaje", "escribir a alguien", "mandar correo", "enviar WhatsApp", "contactar", "avisarle a":
+
+PASO 1 — ¿A quién?
+  Si no especificó destinatario → pregunta: "¿A quién va dirigido el mensaje?"
+  Si lo especificó, busca en CONTACTOS REGISTRADOS del contexto.
+  Si no lo encuentras en contactos → pregunta: "No tengo registrado a [nombre]. ¿Me puede indicar su correo electrónico o número de WhatsApp?"
+
+PASO 2 — ¿Cuál es el mensaje?
+  Si no hay contenido del mensaje → pregunta: "¿Cuál es el contenido del mensaje que desea enviar?"
+
+PASO 3 — ¿Por qué canal?
+  Si no especificó canal → pregunta: "¿Por qué canal lo envío: correo electrónico, WhatsApp o llamada telefónica?"
+
+PASO 4 — ¿A qué hora o cuándo?
+  Si implica un envío programado y no tiene hora → pregunta: "¿A qué hora desea enviarlo?"
+
+Solo cuando tenga: destinatario + contenido + canal → registra con tipo "tarea" o "recordatorio" y campo "accion" completo.
+
+════════════════════════════════════════════════════════
+✅ FLUJO OBLIGATORIO — TAREAS
+════════════════════════════════════════════════════════
+Cuando el Ing. Ospina quiera "agregar tarea", "recordarme", "pendiente", "hacer algo":
+
+PASO 1 — ¿Descripción completa?
+  Si la tarea es vaga o incompleta → pregunta: "¿Puede describir con más detalle qué resultado específico se espera de esta tarea?"
+
+PASO 2 — ¿Fecha límite?
+  Si no tiene fecha → pregunta: "¿Para qué fecha debe estar lista esta tarea?"
+  (Si responde "hoy" o no da fecha tras la pregunta, usa ${hoyISO})
+
+PASO 3 — ¿Prioridad?
+  Inferir automáticamente: si la tarea tiene palabras como "urgente", "crítico", "hoy" → Alta. Por defecto usa Media. Solo pregunta si el contexto es verdaderamente ambiguo.
+
+Solo cuando tenga: descripción clara + fecha → registra con tipo "tarea". La prioridad se infiere si no se menciona.
+
+════════════════════════════════════════════════════════
+💰 FLUJO OBLIGATORIO — GASTOS, COMPRAS E INGRESOS
+════════════════════════════════════════════════════════
+
+⚠️ REGLA CRÍTICA DE CLASIFICACIÓN — LEE ESTO PRIMERO:
+
+GASTO / EGRESO (esIngreso: false) — DINERO QUE SALE:
+  → "compré", "pagué", "gasté", "salió", "transferí a", "envié plata", "hice una compra",
+     "compra de", "factura de", "pagué el", "cancelé", "abonó a", "le pagué a", "desembolsé"
+  → Cualquier compra de producto o servicio: mercado, gasolina, almuerzo, arriendo, servicios públicos
+  → SIEMPRE que el dinero SALE del bolsillo/cuenta del Ing. Ospina → esIngreso: FALSE
+
+INGRESO (esIngreso: true) — DINERO QUE ENTRA:
+  → "recibí", "me pagaron", "me consignaron", "me transfirieron", "me abonaron",
+     "cobré", "llegó un pago", "ingresó a mi cuenta", "depositaron", "facturé y me pagaron"
+  → SOLO cuando el dinero LLEGA al bolsillo/cuenta del Ing. Ospina → esIngreso: TRUE
+
+EJEMPLOS OBLIGATORIOS — memorízalos:
+  "compré café"              → esIngreso: FALSE  (gasto)
+  "pagué el arriendo"        → esIngreso: FALSE  (gasto)
+  "hice una compra en éxito" → esIngreso: FALSE  (gasto)
+  "gasté en transporte"      → esIngreso: FALSE  (gasto)
+  "me pagaron una factura"   → esIngreso: TRUE   (ingreso)
+  "recibí pago de cliente"   → esIngreso: TRUE   (ingreso)
+  "ingresó plata a mi cuenta"→ esIngreso: TRUE   (ingreso)
+
+DUDA: si no está 100% claro si entra o sale, usa el VERBO como guía:
+  → verbo activo de compra/pago/gasto = esIngreso: FALSE
+  → verbo pasivo de recepción/cobro   = esIngreso: TRUE
+
+PASO 1 — ¿Monto?
+  Si no hay monto → pregunta: "¿Cuál es el monto exacto en pesos colombianos?"
+
+PASO 2 — ¿Concepto?
+  Si no está claro → pregunta: "¿Cuál es el concepto o descripción?"
+
+PASO 3 — CUENTA BANCARIA (OPCIONAL — solo actúa si el usuario mencionó una):
+  Si el usuario menciona "Nequi", "Bancolombia", "NU", "Davivienda", "Daviplata" u otro nombre de cuenta:
+  → Busca en CUENTAS BANCARIAS REGISTRADAS del contexto
+  → Usa el [CUENTA_ID:xxx] correspondiente como bankAccountId en datos
+  → Si encuentras la cuenta: NO preguntes, regístrala directamente con ese ID
+  → Si el nombre no está en el contexto: registra con bankAccountId: null y paymentDetails con el nombre mencionado.
+  Si el usuario NO mencionó ninguna cuenta → NO preguntes, registra con bankAccountId: null.
+
+PASO 4 — ¿Categoría?
+  Inferirla automáticamente del contexto. Solo pregunta si es completamente ambiguo.
+
+REGLA FINAL: Con monto + concepto ya tienes suficiente para registrar.
+La categoría se infiere. La cuenta es opcional. El campo esIngreso se determina por el verbo — NUNCA lo dejes en duda.
+
+════════════════════════════════════════════════════════
+📝 FLUJO OBLIGATORIO — NOTAS
+════════════════════════════════════════════════════════
+Cuando el Ing. Ospina quiera "crear nota", "anotar", "guardar idea", "documentar":
+
+PASO 1 — ¿Tema y contenido?
+  Si la nota es muy escueta → pregunta: "¿Puede ampliar el contenido o los puntos clave que desea incluir en esta nota?"
+
+PASO 2 — ¿Estructura?
+  Para notas que claramente se benefician de estructura → pregunta: "¿Prefiere la nota como texto libre, lista de puntos, checklist o con secciones organizadas?"
+
+Cuando el contenido esté claro → genera la nota con tipo "nota" usando bloques ricos según la estructura solicitada.
+Para notas simples y directas (ideas cortas, frases, datos puntuales) → regístralas sin preguntar estructura.
+
+════════════════════════════════════════════════════════
+🔄 REPROGRAMACIÓN DE TAREAS/CITAS
+════════════════════════════════════════════════════════
+Cuando el usuario pida mover, reagendar, postergar o adelantar algo:
+PASO 1 — Si no especificó qué hacer con el original → pregunta:
+  "¿Desea mover la [tarea/cita] (eliminar la anterior y crear la nueva) o prefiere mantener ambas?"
+PASO 2 — Cuando confirme, devuelve el ítem con "accion":
+  - "mover"/"eliminar": accion.tipo = "reprogramar", accion.accion_original = "eliminar", accion.item_id_original = [ID:xxx] del contexto.
+  - "mantener": crea ítem nuevo sin accion.
+
+════════════════════════════════════════════════════════
+GESTIÓN PROACTIVA — detecta y alerta automáticamente:
+════════════════════════════════════════════════════════
 - Tareas vencidas → alerta y sugiere reagendar.
 - Tareas sin fecha → sugiere programarlas.
-- Muchos gastos → sugiere revisión financiera.
 - Agenda vacía → sugiere planificación.
-- Solicitud de agenda o resumen → genera respuesta usando el contexto real.
+- Solicitud de resumen → responde con datos reales del contexto.
 
-FILOSOFÍA DE ASISTENTE EJECUTIVO PROACTIVO:
-Actúas como la secretaria ejecutiva más eficiente del mundo. Antes de registrar cualquier acción, te anticipas: ¿falta algún dato clave? ¿Puedo ejecutar esto ahora mismo? ¿Qué necesita el Ing. Ospina que él aún no ha pedido?
-
-PREGUNTAS OBLIGATORIAS ANTES DE REGISTRAR (si el contexto está incompleto):
-- "Llamar a proveedor" → ¿cuál proveedor? ¿Tenemos su número? ¿Para qué asunto?
-- "Reunión con alguien" → ¿con quién exactamente? ¿Cuándo? ¿Agenda?
-- "Enviar correo" → ¿a quién? ¿Tenemos su email? ¿Qué mensaje?
-- "Tarea vaga" → ¿qué resultado específico se espera? ¿Para cuándo?
-Solo haz UNA pregunta a la vez. Cuando tengas todo, ejecuta.
-
-ACCIONES DE COMUNICACIÓN — cuando una tarea implica contactar a alguien:
-Si la tarea es "llamar", "escribir", "enviar correo", "mandar WhatsApp", "contactar" a una persona:
-1. Busca el contacto en CONTACTOS REGISTRADOS del contexto.
-2. Si lo encuentras, incluye el campo "accion" en tu respuesta con los datos del contacto.
-3. Si no lo encuentras, pregunta: "¿Desea que registre a [nombre] en sus contactos? Por favor indíqueme su email y/o WhatsApp."
-4. NUNCA crees la tarea hasta tener suficiente información para ejecutarla.
-
-REPROGRAMACIÓN DE TAREAS/CITAS — cuando el usuario pida mover, cambiar, reprogramar, reagendar, postergar o adelantar algo:
-FLUJO OBLIGATORIO en 2 pasos:
-PASO 1 — Si el usuario no especificó qué hacer con el original: devuelve tipo "chat" y pregunta:
-  "¿Desea mover la [tarea/cita] (eliminar la anterior y crear la nueva) o prefiere mantener ambas?"
-PASO 2 — Cuando el usuario confirme, devuelve el ítem reprogramado con "accion":
-  - Si dijo "mover" / "eliminar" / "solo la nueva": usa accion.tipo = "reprogramar", accion.accion_original = "eliminar", accion.item_id_original = el [ID:xxx] del ítem del contexto.
-  - Si dijo "mantener" / "conservar" / "las dos": crea el ítem nuevo sin accion, deja el original intacto.
-IMPORTANTE: El ID del ítem original lo encuentras en el contexto como [ID:xxxxxxx] junto a su título. Siempre incluye el ID correcto en item_id_original.
-
-FECHA OBLIGATORIA: Para tipo "tarea" y "recordatorio", el campo "fecha" en datos NUNCA puede ser null. Siempre debe tener una fecha ISO YYYY-MM-DD. Si el usuario no especifica fecha, usa la fecha de hoy: ${hoyISO}.
-
-CLASIFICACIÓN:
+════════════════════════════════════════════════════════
+CLASIFICACIÓN DE ÍTEMS
+════════════════════════════════════════════════════════
 - TAREA: acción pendiente de ejecutar.
 - RECORDATORIO: evento/cita/aviso con fecha u hora.
 - NOTA: apunte, reflexión, idea, documento.
 - GASTO: registro monetario, compra, pago.
 - BURBUJA: tema o proyecto agrupador (NSR-10, Construito, etc.).
+- CLIENTE: registro nuevo o actualización solicitada para CRM.
+- PROYECTO: proyecto CRM con cliente, estado, valor, fecha de inicio o entrega.
+- COTIZACION: propuesta comercial/cotización CRM con cliente, servicios, valor y vencimiento.
+- CHAT: preguntas de recopilación, conversación, resúmenes, consultas.
 
+FECHA OBLIGATORIA: Para tipo "tarea" y "recordatorio", el campo "fecha" NUNCA puede ser null. Si el usuario confirmó "hoy" o no da fecha tras ser preguntado, usa: ${hoyISO}.
+
+════════════════════════════════════════════════════════
 FORMATO DE RESPUESTA OBLIGATORIO — devuelve ÚNICAMENTE este JSON:
+════════════════════════════════════════════════════════
 {
-  "tipo": "tarea|recordatorio|nota|gasto|burbuja|chat",
+  "tipo": "tarea|recordatorio|nota|gasto|burbuja|cliente|proyecto|cotizacion|chat",
   "respuesta": "respuesta formal al Ing. Ospina, máximo 3 frases",
   "datos": {
     "titulo": "título descriptivo o null",
@@ -649,8 +1584,22 @@ FORMATO DE RESPUESTA OBLIGATORIO — devuelve ÚNICAMENTE este JSON:
     "hora": "HH:MM o null",
     "monto": número o null,
     "categoria": "categoría o null",
+    "esIngreso": true o false — CRÍTICO: false si el dinero SALE (compra/pago/gasto), true si el dinero ENTRA (cobro/pago recibido). Analiza el verbo del mensaje para determinarlo.,
+    "bankAccountId": "CUENTA_ID del contexto o null — solo si el usuario mencionó una cuenta específica",
+    "paymentMethod": "Efectivo|Transferencia|Tarjeta Débito|Tarjeta Crédito o null",
     "burbuja": "nombre del tema o null",
-    "bloques": null
+    "bloques": null,
+    "clienteId": "CLIENTE_ID del contexto o null",
+    "clienteNombre": "nombre del cliente o null",
+    "contactEmail": "correo del cliente/contacto o null",
+    "telefono": "teléfono o null",
+    "proyectoNombre": "nombre de proyecto o null",
+    "estado": "estado CRM o null",
+    "valor": número o null,
+    "servicios": [],
+    "fechaInicio": "YYYY-MM-DD o null",
+    "fechaEntrega": "YYYY-MM-DD o null",
+    "fechaVencimiento": "YYYY-MM-DD o null"
   },
   "accion": {
     "tipo": "enviar_correo|enviar_whatsapp|llamar|abrir_url|reprogramar",
@@ -665,8 +1614,11 @@ FORMATO DE RESPUESTA OBLIGATORIO — devuelve ÚNICAMENTE este JSON:
   }
 }
 Omite el campo "accion" si no hay comunicación ni reprogramación involucrada.
+Cuando hagas UNA PREGUNTA de recopilación, usa tipo "chat" y pon solo la pregunta en "respuesta". No registres ningún ítem todavía.
 
-NOTAS RICAS — cuando tipo="nota", usa el campo "bloques" (array) en lugar de "descripcion" para estructurar el contenido. Cada bloque tiene "tipo" y contenido:
+════════════════════════════════════════════════════════
+NOTAS RICAS — cuando tipo="nota", usa el campo "bloques":
+════════════════════════════════════════════════════════
 - Párrafo:   {"tipo":"texto","contenido":"texto libre"}
 - Título H1: {"tipo":"h1","contenido":"Título grande"}
 - Título H2: {"tipo":"h2","contenido":"Subtítulo"}
@@ -675,73 +1627,137 @@ NOTAS RICAS — cuando tipo="nota", usa el campo "bloques" (array) en lugar de "
 - Viñetas:   {"tipo":"bullet","items":[{"id":"1","texto":"punto"},...]}
 - Numerada:  {"tipo":"numbered","items":[{"id":"1","texto":"paso"},...]}
 - Callout:   {"tipo":"callout","contenido":"nota destacada","calloutType":"info"}
-- Imagen:    {"tipo":"imagen","src":"https://en.wikipedia.org/wiki/Special:FilePath/NOMBRE_ARCHIVO.jpg","caption":"descripción"}
+- Imagen:    {"tipo":"imagen","src":"https://commons.wikimedia.org/wiki/Special:FilePath/NOMBRE_ARCHIVO.jpg","caption":"descripción"}
+- Lugar:     {"tipo":"lugar","nombre":"nombre del lugar","ciudad":"ciudad","pais":"país","descripcion":"por qué importa","mapUrl":"https://www.google.com/maps/search/?api=1&query=QUERY","imageUrl":"url de imagen confiable o null"}
+- Mapa:      {"tipo":"mapa","titulo":"Mapa de ...","query":"búsqueda de mapa","mapUrl":"https://www.google.com/maps/search/?api=1&query=QUERY"}
+- Galería:   {"tipo":"galeria","titulo":"Fotos de referencia","imagenes":[{"id":"1","src":"url","caption":"descripción"}]}
+- Recurso:   {"tipo":"recurso","titulo":"nombre del recurso","url":"https://...","descripcion":"para qué sirve"}
+- Itinerario:{"tipo":"itinerario","titulo":"Itinerario","dias":[{"id":"1","fecha":"YYYY-MM-DD o texto","titulo":"Día 1","items":[{"id":"1","hora":"09:00","actividad":"actividad","lugar":"lugar"}]}]}
 
-IMÁGENES SIN API: Para bloques de imagen usa la URL de Wikipedia Special:FilePath. El formato es:
-  https://en.wikipedia.org/wiki/Special:FilePath/NOMBRE_IMAGEN.jpg
-Ejemplos reales:
-  Carbonara → https://en.wikipedia.org/wiki/Special:FilePath/Spaghetti_alla_Carbonara.jpg
-  Pizza →     https://en.wikipedia.org/wiki/Special:FilePath/Pizza_Margherita_ Naples.jpg
-  Colombia →  https://en.wikipedia.org/wiki/Special:FilePath/Colombia_(orthographic_projection).svg
-Usa el nombre de archivo exacto del artículo de Wikipedia relacionado con el tema (usa guiones bajos, extensión .jpg o .png). Incluye imagen al inicio de notas de recetas, lugares, personas o cualquier tema visual cuando el usuario lo pida o cuando enriquezca la nota. Si no estás seguro del nombre exacto del archivo, omite la imagen.
+IMÁGENES — USA SIEMPRE commons.wikimedia.org (NO en.wikipedia.org):
+  Formato: https://commons.wikimedia.org/wiki/Special:FilePath/NOMBRE.jpg
+  REGLA CRÍTICA: el nombre de archivo SIEMPRE en inglés, alemán, italiano u original — NUNCA en español.
+  Ejemplos exactos y verificados:
+    Codillo de cerdo  → Schweinshaxe.jpg
+    Carbonara         → Spaghetti_alla_Carbonara.jpg
+    Ajiaco            → Ajiaco_bogotano.jpg
+    Bandeja paisa     → Bandeja_paisa.jpg
+    Pizza             → Pizza_Margherita_Naples.jpg
+    Paella            → Paella_mixta.jpg
+    Colombia (mapa)   → Colombia_(orthographic_projection).svg
+  Si NO conoces el nombre exacto del archivo en Wikimedia Commons → OMITE el bloque imagen completamente.
 
-Ejemplo de nota con receta:
+MAPAS Y LUGARES — uso general, no solo viajes:
+  Cuando una nota mencione sitios, oficinas, restaurantes, obras, ciudades, hoteles, eventos, clientes, reuniones, trámites o compras presenciales:
+  - Agrega bloques "lugar" para los puntos principales.
+  - Agrega mapUrl siempre con este formato: https://www.google.com/maps/search/?api=1&query=QUERY
+  - QUERY debe ser texto legible con nombre + ciudad + país si los conoces, codificado para URL con espacios como +.
+  - Si no tienes imagen confiable, usa imageUrl:null. La app mostrará una tarjeta útil con botón de mapa.
+  - Usa "recurso" para links útiles, reservas, documentos, páginas oficiales o búsquedas.
+  - Usa "itinerario" cuando haya plan por días, horas, etapas, visitas, obra, diligencias o agenda.
+  - Usa "galeria" solo si tienes 2 o más URLs de imágenes confiables.
+
+Ejemplo nota con receta:
 "bloques": [
-  {"tipo":"imagen","src":"https://en.wikipedia.org/wiki/Special:FilePath/Spaghetti_alla_Carbonara.jpg","caption":"Spaguetti a la Carbonara"},
+  {"tipo":"imagen","src":"https://commons.wikimedia.org/wiki/Special:FilePath/Spaghetti_alla_Carbonara.jpg","caption":"Spaguetti a la Carbonara"},
   {"tipo":"h2","contenido":"Ingredientes"},
   {"tipo":"checklist","items":[{"id":"1","texto":"400g spaguetti","hecho":false},{"id":"2","texto":"200g guanciale","hecho":false},{"id":"3","texto":"4 yemas de huevo","hecho":false},{"id":"4","texto":"100g Pecorino Romano","hecho":false},{"id":"5","texto":"Pimienta negra al gusto","hecho":false}]},
   {"tipo":"h2","contenido":"Preparación"},
   {"tipo":"numbered","items":[{"id":"1","texto":"Hervir el agua con sal y cocinar el spaguetti al dente"},{"id":"2","texto":"Freír el guanciale hasta que esté crujiente"},{"id":"3","texto":"Mezclar yemas con queso rallado y pimienta"},{"id":"4","texto":"Retirar del fuego y mezclar con la salsa de huevo"}]}
 ]
-Cuando uses bloques, pon "descripcion": null. Para notas simples sin estructura, puedes seguir usando solo "descripcion".
+Cuando uses bloques, pon "descripcion": null.
 
-Para conversación, consultas o resúmenes, usa tipo "chat" con solo "respuesta" (puede ser larga si el usuario pide un informe o resumen).
+Para conversación, consultas o resúmenes, usa tipo "chat" (respuesta puede ser larga si el usuario pide informe).
 ${contextSnapshot}`;
 
-  // Mapear historial al formato de Gemini contents
-  const contents = messages.map(m => ({
-    role: m.role === "user" ? "user" : "model",
-    parts: [{ text: m.content }]
-  }));
-
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`;
-
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents,
-      systemInstruction: {
-        parts: [{ text: systemPrompt }]
+  let text = "";
+  if (provider === "claude") {
+    // Anthropic Claude API
+    const claudeModel = model || "claude-sonnet-4-6";
+    const claudeMsgs = messages.map(m => ({
+      role: m.role === "model" || m.role === "assistant" ? "assistant" : "user",
+      content: m.content
+    }));
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": claudeKey,
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true",
       },
-      generationConfig: {
-        responseMimeType: "application/json",
-        temperature: 1.0
-      }
-    })
-  });
-
-  if (!res.ok) {
-    let errorMsg = `Error de API: ${res.status}`;
-    try {
-      const errorDetails = await res.text();
-      console.error("Gemini API error:", errorDetails);
-      const errorJson = JSON.parse(errorDetails);
-      if (errorJson.error?.message) {
-        errorMsg = `${errorJson.error.message} (${res.status})`;
-      }
-    } catch (_) {}
-    throw new Error(errorMsg);
+      body: JSON.stringify({
+        model: claudeModel,
+        max_tokens: 4096,
+        system: systemPrompt,
+        messages: claudeMsgs,
+      })
+    });
+    if (!res.ok) {
+      const e = await res.json().catch(() => ({}));
+      throw new Error(e?.error?.message ?? `Error API Claude ${res.status}`);
+    }
+    const d = await res.json();
+    text = d.content?.[0]?.text?.trim() ?? "";
+  } else if (provider === "openai") {
+    // OpenAI-compatible (OpenRouter, Qwen, Kimi, Groq, etc.)
+    const base = (baseUrl || "https://openrouter.ai/api/v1").replace(/\/$/, "");
+    const mod = model || "gpt-4o-mini";
+    const oaMsgs = [
+      { role: "system", content: systemPrompt },
+      ...messages.map(m => ({ role: m.role === "model" ? "assistant" : m.role, content: m.content }))
+    ];
+    const res = await fetch(`${base}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${activeKey}`,
+        "HTTP-Referer": typeof window !== "undefined" ? window.location.origin : "https://cerebro.app",
+        "X-Title": "Cerebro Personal",
+      },
+      body: JSON.stringify({ model: mod, messages: oaMsgs, temperature: 1.0 })
+    });
+    if (!res.ok) {
+      const e = await res.json().catch(() => ({}));
+      throw new Error(e?.error?.message ?? `Error API ${res.status}`);
+    }
+    const d = await res.json();
+    text = d.choices?.[0]?.message?.content?.trim() ?? "";
+  } else {
+    // Gemini
+    const contents = messages.map(m => ({
+      role: m.role === "user" ? "user" : "model",
+      parts: [{ text: m.content }]
+    }));
+    const gemModel = model || "gemini-2.5-flash";
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${gemModel}:generateContent?key=${geminiKey}`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents,
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+        generationConfig: { responseMimeType: "application/json", temperature: 1.0 }
+      })
+    });
+    if (!res.ok) {
+      let errorMsg = `Error de API: ${res.status}`;
+      try {
+        const errorDetails = await res.text();
+        const errorJson = JSON.parse(errorDetails);
+        if (errorJson.error?.message) errorMsg = `${errorJson.error.message} (${res.status})`;
+      } catch (_) { }
+      throw new Error(errorMsg);
+    }
+    const data = await res.json();
+    text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
   }
 
-  const data = await res.json();
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-  
   try {
     const clean = text.replace(/```json|```/g, "").trim();
     try {
       return JSON.parse(clean);
-    } catch (_) {}
+    } catch (_) { }
 
     const firstBrace = clean.indexOf("{");
     const firstBracket = clean.indexOf("[");
@@ -770,27 +1786,27 @@ ${contextSnapshot}`;
 function AsistenteSparkle({ size = 20, opacity = 1 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="white" style={{ opacity }}>
-      <path d="M12 3C12 3 13.8 8.6 19.2 11C13.8 13.4 12 19 12 19C12 19 10.2 13.4 4.8 11C10.2 8.6 12 3 12 3Z"/>
-      <path d="M12 7.5C12 7.5 12.9 10.2 15 11C12.9 11.8 12 14.5 12 14.5C12 14.5 11.1 11.8 9 11C11.1 10.2 12 7.5 12 7.5Z" fill="rgba(255,255,255,0.45)"/>
+      <path d="M12 3C12 3 13.8 8.6 19.2 11C13.8 13.4 12 19 12 19C12 19 10.2 13.4 4.8 11C10.2 8.6 12 3 12 3Z" />
+      <path d="M12 7.5C12 7.5 12.9 10.2 15 11C12.9 11.8 12 14.5 12 14.5C12 14.5 11.1 11.8 9 11C11.1 10.2 12 7.5 12 7.5Z" fill="rgba(255,255,255,0.45)" />
     </svg>
   );
 }
 
 function AsistenteAvatar({ size = 44, state = "idle" }) {
-  const isThinking  = state === "thinking";
+  const isThinking = state === "thinking";
   const isListening = state === "listening";
 
-  const bgIdle      = "linear-gradient(145deg, #0d1b2a 0%, #1a1a3e 50%, #0a0f1e 100%)";
-  const bgThinking  = "linear-gradient(145deg, #0a2744 0%, #0d3a6e 50%, #0a1f40 100%)";
-  const bgListening = "linear-gradient(145deg, #2a0d1a 0%, #3e0a1a 50%, #1e0a12 100%)";
+  const bgIdle = "linear-gradient(135deg, #1F3A52 0%, #2563eb 50%, #0d9488 100%)";
+  const bgThinking = "linear-gradient(135deg, #2563eb 0%, #0d9488 100%)";
+  const bgListening = "linear-gradient(135deg, #901B2F 0%, #d97706 100%)";
   const bg = isThinking ? bgThinking : isListening ? bgListening : bgIdle;
 
-  const glowIdle      = "0 0 0 1px rgba(255,255,255,0.08), 0 4px 20px rgba(0,0,0,0.4)";
-  const glowThinking  = "0 0 0 1px rgba(10,132,255,0.3), 0 4px 24px rgba(10,132,255,0.2)";
-  const glowListening = "0 0 0 1px rgba(255,69,58,0.3), 0 4px 24px rgba(255,69,58,0.15)";
+  const glowIdle = "0 0 30px rgba(0,113,227,0.45), 0 0 0 1px rgba(255,255,255,0.12)";
+  const glowThinking = "0 0 30px rgba(48,176,199,0.55), 0 0 0 1px rgba(10,132,255,0.3)";
+  const glowListening = "0 0 30px rgba(255,69,58,0.5), 0 0 0 1px rgba(255,159,10,0.3)";
   const glow = isThinking ? glowThinking : isListening ? glowListening : glowIdle;
 
-  const radius = Math.round(size * 0.27);
+  const radius = Math.round(size * 0.5); // círculo perfecto como Stitch
   const sparkSize = Math.round(size * 0.48);
 
   return (
@@ -809,9 +1825,9 @@ function AsistenteAvatar({ size = 44, state = "idle" }) {
         background: "linear-gradient(to bottom, rgba(255,255,255,0.07) 0%, transparent 100%)",
         borderRadius: `${radius}px ${radius}px 0 0`,
         pointerEvents: "none",
-      }}/>
+      }} />
       {/* Sparkle icon */}
-      <div style={{ animation: isThinking ? "spin 3s linear infinite" : "none", display:"flex", alignItems:"center", justifyContent:"center" }}>
+      <div style={{ animation: isThinking ? "spin 3s linear infinite" : "none", display: "flex", alignItems: "center", justifyContent: "center" }}>
         <AsistenteSparkle size={sparkSize} />
       </div>
       {/* Bottom glow dot */}
@@ -821,13 +1837,13 @@ function AsistenteAvatar({ size = 44, state = "idle" }) {
         background: isThinking ? "rgba(10,132,255,0.4)" : isListening ? "rgba(255,69,58,0.35)" : "rgba(94,92,230,0.25)",
         filter: "blur(8px)", borderRadius: "50%",
         transition: "background 0.4s",
-      }}/>
+      }} />
     </div>
   );
 }
 
 function MemoryOrb({ state = "idle" }) {
-  const isThinking  = state === "thinking";
+  const isThinking = state === "thinking";
   const isListening = state === "listening";
   const orbLabel = isThinking ? "Procesando..." : isListening ? "Escuchando..." : "Asistente IA";
   const labelColor = isThinking ? G.accent : isListening ? G.coral : G.textTertiary;
@@ -860,8 +1876,8 @@ function Card({ children, style, onClick, hover, glowColor }) {
         padding: "14px 16px",
         transition: "all 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
         cursor: onClick ? "pointer" : "default",
-        boxShadow: hovered && hover 
-          ? `0 12px 24px rgba(0, 0, 0, 0.06), ${glow}` 
+        boxShadow: hovered && hover
+          ? `0 12px 24px rgba(0, 0, 0, 0.06), ${glow}`
           : `0 4px 12px rgba(0, 0, 0, 0.02), ${glowColor ? `0 0 8px ${glowColor}33` : 'none'}`,
         transform: hovered && hover && onClick ? "translateY(-2px)" : "none",
         ...style,
@@ -904,42 +1920,42 @@ function Spinner() {
 
 // ── Iconos SVG inline ──────────────────────────────────────────────────────
 const Icon = {
-  mic: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>,
-  send: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>,
-  task: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>,
-  bell: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>,
-  note: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>,
-  bubble: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8.56 2.75c4.37 6.03 6.02 9.42 8.03 17.72m2.54-15.38c-3.72 4.35-8.94 5.66-16.88 5.85m19.5 1.9c-3.5-.93-6.63-.82-8.94 0-2.58.92-5.01 2.86-7.44 6.32"/></svg>,
-  receipt: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>,
-  home: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>,
-  check: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>,
-  trash: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>,
-  sun: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>,
-  park: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 8C8 10 5.9 16.17 3.82 19.54a.5.5 0 0 0 .68.68C8.44 18.12 14.85 14.38 17 8z"/><path d="M17 8l-1 9"/></svg>,
-  x: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>,
-  key: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.0" strokeLinecap="round" strokeLinejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3M15.5 7.5L14 9M18.5 4.5L20 6"/></svg>,
-  edit: () => <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>,
+  mic: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><line x1="12" y1="19" x2="12" y2="23" /><line x1="8" y1="23" x2="16" y2="23" /></svg>,
+  send: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></svg>,
+  task: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 11 12 14 22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" /></svg>,
+  bell: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.73 21a2 2 0 0 1-3.46 0" /></svg>,
+  note: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /></svg>,
+  bubble: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><path d="M8.56 2.75c4.37 6.03 6.02 9.42 8.03 17.72m2.54-15.38c-3.72 4.35-8.94 5.66-16.88 5.85m19.5 1.9c-3.5-.93-6.63-.82-8.94 0-2.58.92-5.01 2.86-7.44 6.32" /></svg>,
+  receipt: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 6 2 18 2 18 9" /><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" /><rect x="6" y="14" width="12" height="8" /></svg>,
+  home: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><polyline points="9 22 9 12 15 12 15 22" /></svg>,
+  check: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>,
+  trash: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" /></svg>,
+  sun: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="5" /><line x1="12" y1="1" x2="12" y2="3" /><line x1="12" y1="21" x2="12" y2="23" /><line x1="4.22" y1="4.22" x2="5.64" y2="5.64" /><line x1="18.36" y1="18.36" x2="19.78" y2="19.78" /><line x1="1" y1="12" x2="3" y2="12" /><line x1="21" y1="12" x2="23" y2="12" /><line x1="4.22" y1="19.78" x2="5.64" y2="18.36" /><line x1="18.36" y1="5.64" x2="19.78" y2="4.22" /></svg>,
+  park: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 8C8 10 5.9 16.17 3.82 19.54a.5.5 0 0 0 .68.68C8.44 18.12 14.85 14.38 17 8z" /><path d="M17 8l-1 9" /></svg>,
+  x: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>,
+  key: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.0" strokeLinecap="round" strokeLinejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3M15.5 7.5L14 9M18.5 4.5L20 6" /></svg>,
+  edit: () => <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>,
 };
 
 const TIPO_META = {
-  tarea:      { label: "Tarea",        color: "purple", icon: Icon.task },
-  recordatorio:{ label: "Recordatorio", color: "amber",  icon: Icon.bell },
-  nota:       { label: "Nota",         color: "teal",   icon: Icon.note },
-  gasto:      { label: "Gasto",        color: "coral",  icon: Icon.receipt },
-  burbuja:    { label: "Burbuja",      color: "green",  icon: Icon.bubble },
-  chat:       { label: "Chat",         color: "teal",   icon: Icon.note },
+  tarea: { label: "Tarea", color: "purple", icon: Icon.task },
+  recordatorio: { label: "Recordatorio", color: "amber", icon: Icon.bell },
+  nota: { label: "Nota", color: "teal", icon: Icon.note },
+  gasto: { label: "Gasto", color: "coral", icon: Icon.receipt },
+  burbuja: { label: "Burbuja", color: "green", icon: Icon.bubble },
+  chat: { label: "Chat", color: "teal", icon: Icon.note },
 };
 
 // ── Vista HALL (inicio) ────────────────────────────────────────────────────
-function ViewHall({ 
-  items, 
-  onNav, 
-  onQuickCapture, 
-  onToggle, 
+function ViewHall({
+  items,
+  onNav,
+  onQuickCapture,
+  onToggle,
   onAddItem,
-  googleConnected, 
-  googleConnectedEmail, 
-  googleScopes, 
+  googleConnected,
+  googleConnectedEmail,
+  googleScopes,
   onConnectGoogle,
   habits = [],
   onIncrementHabit,
@@ -994,10 +2010,10 @@ function ViewHall({
   return (
     <div style={{ animation: "fadeIn 0.4s ease", display: "flex", flexDirection: "column", gap: 24 }}>
       {/* Header Premium de Bienvenida estilo Brite */}
-      <div style={{ 
-        display: "flex", 
-        flexDirection: "column", 
-        gap: 12, 
+      <div style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 12,
         padding: "20px 24px",
         background: "rgba(255, 255, 255, 0.45)",
         borderRadius: 24,
@@ -1015,14 +2031,14 @@ function ViewHall({
             </h1>
           </div>
           {/* Indicador de Clima Brite */}
-          <div style={{ 
-            display: "flex", 
-            alignItems: "center", 
-            gap: 8, 
-            background: "rgba(255,255,255,0.8)", 
-            padding: "6px 12px", 
-            borderRadius: 14, 
-            fontSize: 12, 
+          <div style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            background: "rgba(255,255,255,0.8)",
+            padding: "6px 12px",
+            borderRadius: 14,
+            fontSize: 12,
             fontWeight: 600,
             border: "1px solid rgba(0,0,0,0.06)",
             color: G.textSecondary
@@ -1065,10 +2081,10 @@ function ViewHall({
 
       {/* Grid de 2 Columnas estilo Apple */}
       <div className="hall-grid">
-        
+
         {/* Columna Izquierda: Calendario & Tareas */}
         <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-          
+
           {/* WIDGET APPLE CALENDAR */}
           <Card style={{ borderRadius: 24, padding: "20px" }} hover>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, borderBottom: "1px solid rgba(0,0,0,0.06)", paddingBottom: 12 }}>
@@ -1105,7 +2121,7 @@ function ViewHall({
             {googleConnected ? (
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                 {simulatedEvents.map((evt, idx) => (
-                  <div key={idx} 
+                  <div key={idx}
                     onClick={() => onOpenDrawer({ type: "calendar_detail", data: evt })}
                     style={{
                       display: "flex", gap: 12, padding: "12px", background: "rgba(0,0,0,0.02)",
@@ -1134,7 +2150,7 @@ function ViewHall({
                 <svg width="36" height="36" viewBox="0 0 24 24" style={{ opacity: 0.6 }}>
                   <path fill="#4285F4" d="M19.5 3h-3V1.5h-1.5V3h-6V1.5H7.5V3H4.5A1.5 1.5 0 0 0 3 4.5v15A1.5 1.5 0 0 0 4.5 21h15a1.5 1.5 0 0 0 1.5-1.5v-15A1.5 1.5 0 0 0 19.5 3zm0 16.5h-15V8.25h15v11.25z" />
                 </svg>
-                 <div style={{ fontSize: 12.5, fontWeight: 700, color: G.textPrimary }}>¿Cómo sincronizo mi Google Workspace?</div>
+                <div style={{ fontSize: 12.5, fontWeight: 700, color: G.textPrimary }}>¿Cómo sincronizo mi Google Workspace?</div>
                 <p style={{ fontSize: 11, color: G.textSecondary, lineHeight: 1.4, maxWidth: 280, margin: "0 auto 6px" }}>
                   Active su conexión bidireccional y delegue sus citas, correos e informes NSR-10 directamente con Google.
                 </p>
@@ -1223,7 +2239,7 @@ function ViewHall({
                       {item.hecho && <Icon.check />}
                     </button>
 
-                    <div 
+                    <div
                       onClick={() => onOpenDrawer({ type: "task_detail", data: item })}
                       style={{ flex: 1, minWidth: 0, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}
                     >
@@ -1248,7 +2264,7 @@ function ViewHall({
 
         {/* Columna Derecha: IA, Finanzas, Hábitos */}
         <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-          
+
           {/* WIDGET RESUMEN COGNITIVO IA (MemoryOrb Siri) */}
           <Card glowColor={G.accentGlow} style={{ borderRadius: 24, padding: "20px", position: "relative", overflow: "hidden", cursor: "pointer" }}
             onClick={() => onOpenDrawer({ type: "ia_chat" })} hover
@@ -1301,9 +2317,9 @@ function ViewHall({
                   >
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                       <span style={{ fontSize: 16 }}>{habit.icono}</span>
-                      <span style={{ 
-                        fontSize: 9, 
-                        fontWeight: 800, 
+                      <span style={{
+                        fontSize: 9,
+                        fontWeight: 800,
                         color: isFinished ? G.green : G.textTertiary,
                         background: isFinished ? "rgba(52, 199, 89, 0.15)" : "rgba(0,0,0,0.05)",
                         padding: "2px 6px",
@@ -1317,9 +2333,9 @@ function ViewHall({
                     </span>
                     {/* Barra de progreso sutil */}
                     <div style={{ width: "100%", height: 3, background: "rgba(0,0,0,0.06)", borderRadius: 2, marginTop: 4, overflow: "hidden" }}>
-                      <div style={{ 
-                        width: `${completedPct}%`, 
-                        height: "100%", 
+                      <div style={{
+                        width: `${completedPct}%`,
+                        height: "100%",
                         background: isFinished ? G.green : G.accent,
                         borderRadius: 2,
                         transition: "width 0.3s"
@@ -1338,16 +2354,16 @@ function ViewHall({
             boxShadow: "0 10px 24px rgba(0, 0, 0, 0.12)", display: "flex", flexDirection: "column", height: 140,
             justifyContent: "space-between", cursor: "pointer", transition: "all 0.3s"
           }}
-          onMouseEnter={e => e.currentTarget.style.transform = "translateY(-3px)"}
-          onMouseLeave={e => e.currentTarget.style.transform = "none"}
-          onClick={() => onOpenDrawer({ type: "finance_detail" })}
+            onMouseEnter={e => e.currentTarget.style.transform = "translateY(-3px)"}
+            onMouseLeave={e => e.currentTarget.style.transform = "none"}
+            onClick={() => onOpenDrawer({ type: "finance_detail" })}
           >
             <div style={{
               position: "absolute", top: 0, left: 0, width: "100%", height: "100%",
               background: "linear-gradient(135deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0) 50%)",
               pointerEvents: "none"
             }} />
-            
+
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", zIndex: 2 }}>
               <div>
                 <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.15em", color: "rgba(255,255,255,0.5)", textTransform: "uppercase" }}>
@@ -1423,9 +2439,9 @@ function ViewHall({
 // ── Vista OFFICE ───────────────────────────────────────────────────────────
 // ── Destinos disponibles desde la Cesta ───────────────────────────────────────
 const DESTINOS = [
-  { id: "hoy",    label: "Hoy",         color: G.amber,  bg: G.amberSoft,  icon: "☀️" },
+  { id: "hoy", label: "Hoy", color: G.amber, bg: G.amberSoft, icon: "☀️" },
   { id: "semana", label: "Esta semana", color: G.accent, bg: G.accentSoft, icon: "📅" },
-  { id: "hecho",  label: "Completado",  color: G.green,  bg: G.greenSoft,  icon: "✅" },
+  { id: "hecho", label: "Completado", color: G.green, bg: G.greenSoft, icon: "✅" },
 ];
 
 // ── Tarjeta de tarea con botones de movimiento ─────────────────────────────────
@@ -1540,10 +2556,10 @@ function ViewOffice({ items, onToggle, onDelete, onOpenDrawer }) {
     setColumnas(prev => ({ ...prev, [id]: col }));
   }
 
-  const cestaItems  = tareas.filter(t => (columnas[t.id] || "cesta") === "cesta");
-  const hoyItems    = tareas.filter(t => columnas[t.id] === "hoy");
+  const cestaItems = tareas.filter(t => (columnas[t.id] || "cesta") === "cesta");
+  const hoyItems = tareas.filter(t => columnas[t.id] === "hoy");
   const semanaItems = tareas.filter(t => columnas[t.id] === "semana");
-  const hechoItems  = tareas.filter(t => columnas[t.id] === "hecho");
+  const hechoItems = tareas.filter(t => columnas[t.id] === "hecho");
 
   const totalActivas = hoyItems.length + semanaItems.length;
 
@@ -1577,8 +2593,10 @@ function ViewOffice({ items, onToggle, onDelete, onOpenDrawer }) {
                 fontSize: 11, fontWeight: 700, color: d.color,
               }}>
                 {d.icon} {d.label}
-                <span style={{ background: d.color, color: "#fff", borderRadius: 10,
-                  padding: "0px 5px", fontSize: 9, fontWeight: 800 }}>
+                <span style={{
+                  background: d.color, color: "#fff", borderRadius: 10,
+                  padding: "0px 5px", fontSize: 9, fontWeight: 800
+                }}>
                   {d.id === "hoy" ? hoyItems.length : d.id === "semana" ? semanaItems.length : hechoItems.length}
                 </span>
               </div>
@@ -1615,8 +2633,10 @@ function ViewOffice({ items, onToggle, onDelete, onOpenDrawer }) {
       {/* ── COLUMNAS DESTINO ────────────────────────────────────────────── */}
       {tareas.length > 0 && (
         <div>
-          <div style={{ fontSize: 11, fontWeight: 700, color: G.textTertiary,
-            textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 12 }}>
+          <div style={{
+            fontSize: 11, fontWeight: 700, color: G.textTertiary,
+            textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 12
+          }}>
             Tablero de trabajo · {totalActivas} activa{totalActivas !== 1 ? "s" : ""}
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
@@ -1698,17 +2718,17 @@ function ViewPark({ items, onDelete, onOpenDrawer }) {
               const isActive = activeBubble === b;
               return (
                 <button
-                   key={b}
-                   onClick={() => setActiveBubble(isActive ? null : b)}
-                   style={{
-                     background: isActive ? G.green : G.greenSoft,
-                     color: isActive ? "#ffffff" : G.green,
-                     border: `1px solid ${isActive ? G.green : "rgba(52, 199, 89, 0.2)"}`,
-                     borderRadius: 20, padding: "6px 14px",
-                     fontSize: 13, fontWeight: 600, transition: "all 0.25s cubic-bezier(0.4, 0, 0.2, 1)",
-                     boxShadow: isActive ? `0 2px 8px rgba(52, 199, 89, 0.15)` : "none",
-                     transform: isActive ? "scale(1.03)" : "scale(1)"
-                   }}
+                  key={b}
+                  onClick={() => setActiveBubble(isActive ? null : b)}
+                  style={{
+                    background: isActive ? G.green : G.greenSoft,
+                    color: isActive ? "#ffffff" : G.green,
+                    border: `1px solid ${isActive ? G.green : "rgba(52, 199, 89, 0.2)"}`,
+                    borderRadius: 20, padding: "6px 14px",
+                    fontSize: 13, fontWeight: 600, transition: "all 0.25s cubic-bezier(0.4, 0, 0.2, 1)",
+                    boxShadow: isActive ? `0 2px 8px rgba(52, 199, 89, 0.15)` : "none",
+                    transform: isActive ? "scale(1.03)" : "scale(1)"
+                  }}
                 >
                   🌿 {b}
                 </button>
@@ -1718,9 +2738,9 @@ function ViewPark({ items, onDelete, onOpenDrawer }) {
           {activeBubble && (
             <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 8, animation: "fadeIn 0.3s ease" }}>
               {bubbleItems.map(item => (
-                <Card 
-                  key={item.id} 
-                  hover 
+                <Card
+                  key={item.id}
+                  hover
                   style={{ padding: "12px 14px", cursor: "pointer" }}
                   onClick={() => onOpenDrawer && onOpenDrawer({ type: "task_detail", data: item })}
                 >
@@ -1753,7 +2773,7 @@ function ViewPark({ items, onDelete, onOpenDrawer }) {
         <div style={{ marginBottom: 28 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
             <div style={{ fontSize: 11, color: G.textTertiary, fontWeight: 600, letterSpacing: "0.05em" }}>GASTOS</div>
-            <div 
+            <div
               style={{
                 fontSize: 13, fontWeight: 700, color: G.coral,
                 background: G.coralSoft, border: `1px solid rgba(255, 59, 48, 0.15)`,
@@ -1766,9 +2786,9 @@ function ViewPark({ items, onDelete, onOpenDrawer }) {
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {gastos.map(g => (
-              <Card 
-                key={g.id} 
-                hover 
+              <Card
+                key={g.id}
+                hover
                 style={{ padding: "12px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}
                 onClick={() => onOpenDrawer && onOpenDrawer({ type: "finance_detail", data: gastos })}
               >
@@ -1806,8 +2826,8 @@ function ViewPark({ items, onDelete, onOpenDrawer }) {
           <div style={{ fontSize: 11, color: G.textTertiary, fontWeight: 600, marginBottom: 12, letterSpacing: "0.05em" }}>NOTAS</div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             {notas.map(n => (
-              <Card 
-                key={n.id} 
+              <Card
+                key={n.id}
                 hover
                 style={{ padding: "12px 14px", display: "flex", flexDirection: "column", justifyContent: "space-between", minHeight: 100, cursor: "pointer" }}
                 onClick={() => onOpenDrawer && onOpenDrawer({ type: "task_detail", data: n })}
@@ -1850,33 +2870,36 @@ function ViewPark({ items, onDelete, onOpenDrawer }) {
 
 // ── ActionCard ─────────────────────────────────────────────────────────────
 function ActionCard({ accion }) {
-  if (!accion || !accion.tipo || accion.tipo === "null") return null;
+  if (!accion || typeof accion !== "object" || !accion.tipo || accion.tipo === "null") return null;
+  const destinatarioNombre = safeMessageText(accion.destinatario_nombre);
+  const asunto = safeMessageText(accion.asunto);
+  const mensaje = safeMessageText(accion.mensaje);
 
   function ejecutar() {
     if (accion.tipo === "enviar_correo") {
-      const to = accion.destinatario_email || "";
-      const su = encodeURIComponent(accion.asunto || "");
-      const body = encodeURIComponent(accion.mensaje || "");
+      const to = safeMessageText(accion.destinatario_email);
+      const su = encodeURIComponent(asunto);
+      const body = encodeURIComponent(mensaje);
       window.open(`https://mail.google.com/mail/?view=cm&to=${to}&su=${su}&body=${body}`, "_blank");
     } else if (accion.tipo === "enviar_whatsapp") {
-      const num = (accion.destinatario_whatsapp || accion.destinatario_telefono || "").replace(/\D/g, "");
-      const msg = encodeURIComponent(accion.mensaje || "");
+      const num = safeMessageText(accion.destinatario_whatsapp || accion.destinatario_telefono).replace(/\D/g, "");
+      const msg = encodeURIComponent(mensaje);
       window.open(`https://api.whatsapp.com/send?phone=${num}&text=${msg}`, "_blank");
     } else if (accion.tipo === "llamar") {
-      const tel = accion.destinatario_telefono || accion.destinatario_whatsapp || "";
+      const tel = safeMessageText(accion.destinatario_telefono || accion.destinatario_whatsapp);
       window.location.href = `tel:${tel}`;
-    } else if (accion.tipo === "abrir_url" && accion.url) {
-      window.open(accion.url, "_blank");
+    } else if (accion.tipo === "abrir_url" && safeMessageText(accion.url)) {
+      window.open(safeMessageText(accion.url), "_blank");
     }
   }
 
   const ICONS = {
-    enviar_correo:    { icon: "✉️", label: "Abrir Gmail",   color: "#ea4335", bg: "rgba(234,67,53,0.08)"  },
-    enviar_whatsapp:  { icon: "💬", label: "WhatsApp",      color: "#25d366", bg: "rgba(37,211,102,0.08)" },
-    llamar:           { icon: "📞", label: "Llamar",        color: "#34c759", bg: "rgba(52,199,89,0.08)"  },
-    abrir_url:        { icon: "🔗", label: "Abrir enlace",  color: "#0071e3", bg: "rgba(0,113,227,0.08)"  },
+    enviar_correo: { icon: "✉️", label: "Abrir Gmail", color: "#ea4335", bg: "rgba(234,67,53,0.08)" },
+    enviar_whatsapp: { icon: "💬", label: "WhatsApp", color: "#25d366", bg: "rgba(37,211,102,0.08)" },
+    llamar: { icon: "📞", label: "Llamar", color: "#34c759", bg: "rgba(52,199,89,0.08)" },
+    abrir_url: { icon: "🔗", label: "Abrir enlace", color: "#2563eb", bg: "rgba(37,99,235,0.08)" },
   };
-  const meta = ICONS[accion.tipo] || { icon: "⚡", label: "Ejecutar", color: "#0071e3", bg: "rgba(0,113,227,0.08)" };
+  const meta = ICONS[accion.tipo] || { icon: "⚡", label: "Ejecutar", color: "#2563eb", bg: "rgba(37,99,235,0.08)" };
 
   return (
     <div style={{
@@ -1885,23 +2908,23 @@ function ActionCard({ accion }) {
       border: `1px solid ${meta.color}22`,
       display: "flex", flexDirection: "column", gap: 4,
     }}>
-      {accion.destinatario_nombre && (
+      {destinatarioNombre && (
         <div style={{ fontSize: 10, fontWeight: 600, color: meta.color, opacity: 0.8 }}>
-          {meta.icon} Para: {accion.destinatario_nombre}
+          {meta.icon} Para: {destinatarioNombre}
         </div>
       )}
-      {accion.asunto && (
-        <div style={{ fontSize: 10, color: "#515154", opacity: 0.9 }}>
-          📌 {accion.asunto}
+      {asunto && (
+        <div style={{ fontSize: 10, color: "#475569", opacity: 0.9 }}>
+          {asunto}
         </div>
       )}
-      {accion.mensaje && (
+      {mensaje && (
         <div style={{
           fontSize: 10, color: "#515154", lineHeight: 1.4,
           maxHeight: 48, overflow: "hidden",
           display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical",
         }}>
-          {accion.mensaje}
+          {mensaje}
         </div>
       )}
       <button
@@ -1921,217 +2944,455 @@ function ActionCard({ accion }) {
   );
 }
 
+// ── Helpers Contactos / Equipo ────────────────────────────────────────────
+const ESTADO_COLORS = { activo: "#16a34a", remoto: "#2563eb", vacaciones: "#d97706", inactivo: "#64748b" };
+const ESTADO_LABELS = { activo: "Activo", remoto: "Remoto", vacaciones: "Vacaciones", inactivo: "Inactivo" };
+
+function AvatarImg({ c, size = 44, radius = "50%" }) {
+  const parts = (c.nombre || "?").trim().split(" ");
+  const initials = parts.length >= 2 ? (parts[0][0] + parts[1][0]).toUpperCase() : parts[0].slice(0, 2).toUpperCase();
+  const paleta = ["#0059b5", "#5e5ce6", "#34c759", "#ff9500", "#ff3b30", "#24b495"];
+  const bg = c.color || paleta[(c.nombre?.charCodeAt(0) || 0) % paleta.length];
+  if (c.foto) {
+    return (
+      <div style={{ width: size, height: size, borderRadius: radius, flexShrink: 0, overflow: "hidden", background: bg }}>
+        <img src={c.foto} alt={c.nombre}
+          style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+          onError={e => {
+            e.target.style.display = "none";
+            e.target.parentNode.innerHTML =
+              `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:${Math.round(size * 0.32)}px;font-weight:800;color:#fff">${initials}</div>`;
+          }}
+        />
+      </div>
+    );
+  }
+  return (
+    <div style={{
+      width: size, height: size, borderRadius: radius, flexShrink: 0, background: bg,
+      display: "flex", alignItems: "center", justifyContent: "center",
+      fontSize: Math.round(size * 0.32), fontWeight: 800, color: "#fff", letterSpacing: "-0.02em"
+    }}>
+      {initials}
+    </div>
+  );
+}
+
 // ── Vista Contactos ────────────────────────────────────────────────────────
 function ViewContactos({ contactos, setContactos, darkMode = false }) {
-  const [form, setForm] = useState({ nombre: "", empresa: "", cargo: "", email: "", telefono: "", whatsapp: "", notas: "" });
+  const FORM_EMPTY = { nombre: "", empresa: "", cargo: "", departamento: "", email: "", telefono: "", whatsapp: "", foto: "", estado: "activo", notas: "" };
+  const [seccion, setSeccion] = useState("contactos");
+  const [form, setForm] = useState(FORM_EMPTY);
   const [search, setSearch] = useState("");
-  const [editando, setEditando] = useState(null); // id del contacto en edición
-  const [expandido, setExpandido] = useState(null);
+  const [editando, setEditando] = useState(null);
+  const [seleccionado, setSel] = useState(null);
+  const [showForm, setShowForm] = useState(false);
+  const [equipo, setEquipo] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("cerebro_equipo") || "[]"); } catch { return []; }
+  });
+  useEffect(() => { try { localStorage.setItem("cerebro_equipo", JSON.stringify(equipo)); } catch { } }, [equipo]);
+  useEffect(() => { setSel(null); setSearch(""); }, [seccion]);
 
-  const FORM_FIELDS = [
-    { key: "nombre",   label: "Nombre completo", required: true },
-    { key: "empresa",  label: "Empresa / Organización" },
-    { key: "cargo",    label: "Cargo / Rol" },
-    { key: "email",    label: "Correo electrónico" },
+  const FORM_FIELDS_C = [
+    { key: "nombre", label: "Nombre completo", required: true },
+    { key: "foto", label: "Foto (URL de imagen)" },
+    { key: "empresa", label: "Empresa / Organización" },
+    { key: "cargo", label: "Cargo / Rol" },
+    { key: "email", label: "Correo electrónico" },
     { key: "telefono", label: "Teléfono" },
     { key: "whatsapp", label: "WhatsApp (con código país)" },
-    { key: "notas",    label: "Notas internas" },
+    { key: "notas", label: "Notas internas" },
   ];
+  const FORM_FIELDS_E = [
+    { key: "nombre", label: "Nombre completo", required: true },
+    { key: "foto", label: "Foto (URL de imagen)" },
+    { key: "cargo", label: "Cargo / Rol" },
+    { key: "departamento", label: "Área / Departamento" },
+    { key: "email", label: "Correo electrónico" },
+    { key: "telefono", label: "Teléfono" },
+    { key: "whatsapp", label: "WhatsApp" },
+    { key: "notas", label: "Notas" },
+  ];
+  const FORM_FIELDS = seccion === "equipo" ? FORM_FIELDS_E : FORM_FIELDS_C;
 
-  const filtrados = contactos.filter(c =>
-    !search || [c.nombre, c.empresa, c.cargo, c.email].some(v => v?.toLowerCase().includes(search.toLowerCase()))
+  const lista = seccion === "equipo" ? equipo : contactos;
+  const setLista = seccion === "equipo" ? setEquipo : setContactos;
+
+  const filtrados = lista.filter(c =>
+    !search || [c.nombre, c.empresa, c.cargo, c.email, c.departamento].some(v => v?.toLowerCase().includes(search.toLowerCase()))
   );
+  const detalle = seleccionado ? lista.find(c => c.id === seleccionado) : (filtrados[0] || null);
 
   function guardar() {
     if (!form.nombre.trim()) return;
     if (editando) {
-      setContactos(prev => prev.map(c => c.id === editando ? { ...c, ...form } : c));
+      setLista(prev => prev.map(c => c.id === editando ? { ...c, ...form } : c));
       setEditando(null);
     } else {
-      setContactos(prev => [{ id: Math.random().toString(36).slice(2,9), ...form }, ...prev]);
+      const nuevo = { id: Math.random().toString(36).slice(2, 9), ...form };
+      setLista(prev => [nuevo, ...prev]);
+      setSel(nuevo.id);
     }
-    setForm({ nombre: "", empresa: "", cargo: "", email: "", telefono: "", whatsapp: "", notas: "" });
+    setForm(FORM_EMPTY);
+    setShowForm(false);
   }
 
-  function editar(c) {
-    setForm({ nombre: c.nombre||"", empresa: c.empresa||"", cargo: c.cargo||"", email: c.email||"", telefono: c.telefono||"", whatsapp: c.whatsapp||"", notas: c.notas||"" });
-    setEditando(c.id);
-    setExpandido(null);
-    window.scrollTo({ top: 0, behavior: "smooth" });
+  function abrirEditar(c) {
+    setForm({
+      ...FORM_EMPTY, nombre: c.nombre || "", empresa: c.empresa || "", cargo: c.cargo || "",
+      departamento: c.departamento || "", email: c.email || "", telefono: c.telefono || "",
+      whatsapp: c.whatsapp || "", foto: c.foto || "", estado: c.estado || "activo", notas: c.notas || ""
+    });
+    setEditando(c.id); setShowForm(true);
   }
 
   function eliminar(id) {
-    setContactos(prev => prev.filter(c => c.id !== id));
-    if (expandido === id) setExpandido(null);
+    setLista(prev => prev.filter(c => c.id !== id));
+    if (seleccionado === id) setSel(null);
   }
 
-  function cancelar() {
-    setForm({ nombre: "", empresa: "", cargo: "", email: "", telefono: "", whatsapp: "", notas: "" });
-    setEditando(null);
+  function cancelarForm() { setForm(FORM_EMPTY); setEditando(null); setShowForm(false); }
+
+  function handleFotoUpload(e) {
+    const file = e.target.files?.[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => setForm(p => ({ ...p, foto: ev.target.result }));
+    reader.readAsDataURL(file);
   }
 
-  const avatar = (c) => {
-    const initial = (c.nombre || "?")[0].toUpperCase();
-    const colors = ["#0071e3","#5e5ce6","#34c759","#ff9500","#ff3b30","#30b0c7"];
-    const idx = c.nombre?.charCodeAt(0) % colors.length || 0;
-    return { initial, color: colors[idx] };
+  const avatarColor = c => {
+    const paleta = ["#0059b5", "#5e5ce6", "#34c759", "#ff9500", "#ff3b30", "#24b495"];
+    return c.color || paleta[(c.nombre?.charCodeAt(0) || 0) % paleta.length];
+  };
+
+  const campo = {
+    width: "100%", padding: "9px 12px", borderRadius: 10,
+    border: `1px solid ${G.border}`, background: darkMode ? "#1a1a28" : "#f2f3fd",
+    color: G.textPrimary, fontSize: 12, outline: "none",
+    boxSizing: "border-box", fontFamily: "inherit", resize: "none",
   };
 
   return (
-    <div style={{ maxWidth: 900, margin: "0 auto", display: "flex", gap: 24 }}>
+    <div style={{ display: "flex", height: "100%", overflow: "hidden", margin: "-24px", gap: 0 }}>
 
-      {/* Formulario lateral */}
-      <div style={{ width: 280, flexShrink: 0 }}>
-        <div style={{
-          background: G.surface, borderRadius: 16, padding: 20,
-          border: `1px solid ${G.border}`,
-          boxShadow: "0 2px 12px rgba(0,0,0,0.05)", position: "sticky", top: 0,
-        }}>
-          <div style={{ fontSize: 13, fontWeight: 800, color: G.textPrimary, marginBottom: 14 }}>
-            {editando ? "✏ Editar contacto" : "+ Nuevo contacto"}
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {FORM_FIELDS.map(f => (
-              <div key={f.key}>
-                <div style={{ fontSize: 10, fontWeight: 600, color: G.textTertiary, marginBottom: 3, textTransform: "uppercase", letterSpacing: "0.05em" }}>
-                  {f.label}{f.required && <span style={{ color: G.coral }}> *</span>}
-                </div>
-                {f.key === "notas" ? (
-                  <textarea value={form[f.key]} onChange={e => setForm(p => ({ ...p, [f.key]: e.target.value }))}
-                    rows={2}
-                    style={{ width: "100%", padding: "7px 10px", borderRadius: 8, border: `1px solid ${G.border}`, background: G.surface, color: G.textPrimary, fontSize: 12, outline: "none", resize: "none", boxSizing: "border-box", fontFamily: "Inter, sans-serif" }} />
-                ) : (
-                  <input value={form[f.key]} onChange={e => setForm(p => ({ ...p, [f.key]: e.target.value }))}
-                    onKeyDown={e => e.key === "Enter" && guardar()}
-                    style={{ width: "100%", padding: "7px 10px", borderRadius: 8, border: `1px solid ${G.border}`, background: G.surface, color: G.textPrimary, fontSize: 12, outline: "none", boxSizing: "border-box" }} />
-                )}
+      {/* ── Modal Formulario ── */}
+      {showForm && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 300, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", backdropFilter: "blur(4px)" }}
+          onClick={e => { if (e.target === e.currentTarget) cancelarForm(); }}>
+          <div style={{ background: G.glass, backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)", border: `1px solid ${G.glassBorder}`, borderRadius: 24, width: "100%", maxWidth: 480, maxHeight: "90vh", display: "flex", flexDirection: "column", overflow: "hidden", boxShadow: "0 24px 80px rgba(0,0,0,0.3)" }}>
+            <div style={{ padding: "22px 24px 18px", borderBottom: `1px solid ${G.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div>
+                <div style={{ fontSize: 18, fontWeight: 900, color: G.textPrimary }}>{editando ? "Editar" : "Nuevo"} {seccion === "equipo" ? "miembro del equipo" : "contacto"}</div>
+                <div style={{ fontSize: 12, color: G.textSecondary, marginTop: 2 }}>Completa los datos</div>
               </div>
+              <button onClick={cancelarForm} style={{ background: "none", border: "none", cursor: "pointer", color: G.textTertiary, fontSize: 20, lineHeight: 1, padding: 4 }}>✕</button>
+            </div>
+            <div style={{ flex: 1, overflowY: "auto", padding: "20px 24px", display: "flex", flexDirection: "column", gap: 12 }}>
+              {/* Preview avatar */}
+              <div style={{ display: "flex", alignItems: "center", gap: 14, padding: "12px 14px", background: darkMode ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.02)", borderRadius: 14, border: `1px solid ${G.border}` }}>
+                <AvatarImg c={{ ...form, nombre: form.nombre || "?", color: avatarColor({ nombre: form.nombre }) }} size={56} radius={seccion === "equipo" ? "50%" : "14px"} />
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: G.textPrimary }}>{form.nombre || "Nombre"}</div>
+                  <div style={{ fontSize: 11, color: G.textTertiary, marginTop: 2 }}>{form.cargo || (seccion === "equipo" ? "Sin cargo" : form.empresa || "Sin empresa")}</div>
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: 5, marginTop: 7, padding: "4px 10px", borderRadius: 7, border: `1px solid ${G.border}`, background: darkMode ? "rgba(255,255,255,0.05)" : "#fff", fontSize: 10, fontWeight: 600, color: G.textSecondary, cursor: "pointer" }}>
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" /></svg>
+                    Subir foto
+                    <input type="file" accept="image/*" onChange={handleFotoUpload} style={{ display: "none" }} />
+                  </label>
+                </div>
+              </div>
+              {/* Estado (solo equipo) */}
+              {seccion === "equipo" && (
+                <div>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: G.textTertiary, marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>Estado</div>
+                  <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                    {Object.entries(ESTADO_LABELS).map(([k, v]) => (
+                      <button key={k} onClick={() => setForm(p => ({ ...p, estado: k }))}
+                        style={{
+                          padding: "5px 12px", borderRadius: 99, fontSize: 11, fontWeight: 600, cursor: "pointer",
+                          background: form.estado === k ? ESTADO_COLORS[k] : "transparent",
+                          color: form.estado === k ? "#fff" : G.textTertiary,
+                          border: `1px solid ${form.estado === k ? ESTADO_COLORS[k] : G.border}`,
+                          transition: "all 0.15s"
+                        }}>
+                        {v}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {FORM_FIELDS.map(f => (
+                <div key={f.key}>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: G.textTertiary, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                    {f.label}{f.required && <span style={{ color: G.coral }}> *</span>}
+                  </div>
+                  {f.key === "notas"
+                    ? <textarea value={form[f.key]} onChange={e => setForm(p => ({ ...p, [f.key]: e.target.value }))} rows={3} style={campo} />
+                    : <input value={form[f.key]} onChange={e => setForm(p => ({ ...p, [f.key]: e.target.value }))}
+                      placeholder={f.key === "foto" ? "https://ejemplo.com/foto.jpg" : ""}
+                      onKeyDown={e => e.key === "Enter" && guardar()} style={campo} />}
+                </div>
+              ))}
+            </div>
+            <div style={{ padding: "16px 24px", borderTop: `1px solid ${G.border}`, display: "flex", gap: 10 }}>
+              <button onClick={cancelarForm} style={{ padding: "10px 20px", background: "none", border: "none", cursor: "pointer", fontSize: 13, fontWeight: 600, color: G.textTertiary }}>Cancelar</button>
+              <button onClick={guardar} disabled={!form.nombre.trim()}
+                style={{ flex: 1, padding: "10px 0", borderRadius: 12, border: "none", background: form.nombre.trim() ? G.accent : G.border, color: form.nombre.trim() ? "#fff" : G.textTertiary, fontWeight: 700, fontSize: 13, cursor: form.nombre.trim() ? "pointer" : "not-allowed" }}>
+                {editando ? "Guardar cambios" : `Añadir ${seccion === "equipo" ? "al equipo" : "contacto"}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Panel izquierdo ── */}
+      <div style={{ width: 300, flexShrink: 0, borderRight: `1px solid ${G.border}`, background: darkMode ? G.surface : "#fff", display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+
+        {/* Tab toggle */}
+        <div style={{ padding: "14px 14px 0", borderBottom: `1px solid ${G.border}` }}>
+          <div style={{ display: "flex", gap: 2, background: darkMode ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)", borderRadius: 10, padding: 3, marginBottom: 12 }}>
+            {[
+              { id: "contactos", label: "Contactos", count: contactos.length },
+              { id: "equipo", label: "Equipo", count: equipo.length },
+            ].map(s => (
+              <button key={s.id} onClick={() => setSeccion(s.id)}
+                style={{
+                  flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
+                  padding: "7px 10px", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", border: "none",
+                  background: seccion === s.id ? (darkMode ? "#ffffff" : "#ffffff") : "transparent",
+                  color: seccion === s.id ? (darkMode ? "#000" : G.textPrimary) : G.textTertiary,
+                  boxShadow: seccion === s.id ? "0 1px 3px rgba(0,0,0,0.12)" : "none",
+                  transition: "all 0.15s"
+                }}>
+                {s.label}
+                <span style={{
+                  fontSize: 9, fontWeight: 700, borderRadius: 8, padding: "1px 5px",
+                  background: seccion === s.id ? G.accent : `${G.textTertiary}22`,
+                  color: seccion === s.id ? "#fff" : G.textTertiary
+                }}>
+                  {s.count}
+                </span>
+              </button>
             ))}
           </div>
-          <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
-            <button onClick={guardar}
-              style={{ flex: 1, padding: "9px 0", background: form.nombre.trim() ? G.accent : "rgba(0,0,0,0.06)",
-                color: form.nombre.trim() ? "#fff" : G.textTertiary, border: "none", borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: form.nombre.trim() ? "pointer" : "default",
-                boxShadow: form.nombre.trim() ? "0 4px 12px rgba(0,113,227,0.2)" : "none" }}>
-              {editando ? "Guardar cambios" : "Guardar"}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: G.textTertiary }}>
+              {seccion === "equipo" ? "Miembros del equipo" : "Mis contactos"}
+            </span>
+            <button onClick={() => { cancelarForm(); setShowForm(true); }}
+              style={{ padding: "5px 10px", background: G.accent, border: "none", cursor: "pointer", color: "#fff", display: "flex", borderRadius: 8, fontSize: 11, fontWeight: 700, gap: 4, alignItems: "center" }}>
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
+              Nuevo
             </button>
-            {editando && (
-              <button onClick={cancelar}
-                style={{ padding: "9px 14px", background: "rgba(0,0,0,0.04)", border: "none", borderRadius: 10, fontSize: 12, color: G.textSecondary, cursor: "pointer" }}>
-                Cancelar
-              </button>
-            )}
           </div>
-          {contactos.length > 0 && (
-            <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${G.border}`, fontSize: 11, color: G.textTertiary, textAlign: "center" }}>
-              {contactos.length} contacto{contactos.length !== 1 ? "s" : ""} · Sincronizados con el Asistente Personal
+          <div style={{ position: "relative", marginBottom: 12 }}>
+            <svg style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)" }} width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={G.textTertiary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /></svg>
+            <input value={search} onChange={e => setSearch(e.target.value)}
+              placeholder={`Buscar ${seccion === "equipo" ? "en equipo" : "contactos"}...`}
+              style={{ width: "100%", padding: "7px 12px 7px 30px", borderRadius: 99, border: `1px solid ${G.border}`, background: darkMode ? "#1a1a28" : "#f2f3fd", color: G.textPrimary, fontSize: 12, outline: "none", boxSizing: "border-box", fontFamily: "inherit" }} />
+          </div>
+        </div>
+
+        <div style={{ flex: 1, overflowY: "auto", padding: seccion === "equipo" ? "10px 12px" : "8px" }}>
+          {filtrados.length === 0 ? (
+            <div style={{ textAlign: "center", padding: "48px 16px", color: G.textTertiary }}>
+              <div style={{ fontSize: 36, marginBottom: 10 }}>{seccion === "equipo" ? "👥" : "👤"}</div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: G.textSecondary, marginBottom: 4 }}>
+                {search ? "Sin resultados" : (seccion === "equipo" ? "Sin miembros aún" : "Sin contactos aún")}
+              </div>
+              <div style={{ fontSize: 11 }}>{search ? "Prueba con otro término" : `Añade ${seccion === "equipo" ? "tu equipo" : "tu primer contacto"}`}</div>
             </div>
+          ) : seccion === "equipo" ? (
+            /* Grid 2 columnas para equipo */
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              {filtrados.map(c => {
+                const isActive = detalle?.id === c.id;
+                const stColor = ESTADO_COLORS[c.estado || "activo"];
+                return (
+                  <div key={c.id} onClick={() => setSel(c.id)}
+                    style={{
+                      display: "flex", flexDirection: "column", alignItems: "center", padding: "14px 8px 12px",
+                      borderRadius: 16, cursor: "pointer", transition: "all 0.15s",
+                      background: isActive ? G.accentSoft : (darkMode ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.02)"),
+                      border: `1px solid ${isActive ? `${G.accent}44` : G.border}`
+                    }}
+                    onMouseEnter={e => { if (!isActive) { e.currentTarget.style.background = darkMode ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)"; e.currentTarget.style.borderColor = G.accent + "44"; } }}
+                    onMouseLeave={e => { if (!isActive) { e.currentTarget.style.background = darkMode ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.02)"; e.currentTarget.style.borderColor = G.border; } }}>
+                    <div style={{ position: "relative", marginBottom: 8 }}>
+                      <AvatarImg c={c} size={52} radius="50%" />
+                      <div style={{
+                        position: "absolute", bottom: 1, right: 1, width: 12, height: 12, borderRadius: "50%",
+                        background: stColor, border: `2px solid ${darkMode ? G.surface : "#fff"}`
+                      }} />
+                    </div>
+                    <div style={{ fontSize: 11.5, fontWeight: 700, color: G.textPrimary, textAlign: "center", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", width: "100%", paddingInline: 4 }}>
+                      {c.nombre.split(" ")[0]}
+                    </div>
+                    <div style={{ fontSize: 9.5, color: G.textTertiary, textAlign: "center", marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", width: "100%", paddingInline: 4 }}>
+                      {c.cargo || c.departamento || "Sin cargo"}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            /* Lista clásica para contactos */
+            filtrados.map(c => {
+              const isActive = detalle?.id === c.id;
+              return (
+                <div key={c.id} onClick={() => setSel(c.id)}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 12, padding: "10px 12px", borderRadius: 14, cursor: "pointer", transition: "background 0.15s", marginBottom: 2,
+                    background: isActive ? (darkMode ? "rgba(0,132,255,0.12)" : "rgba(0,89,181,0.06)") : "transparent",
+                    border: isActive ? `1px solid ${darkMode ? "rgba(0,132,255,0.2)" : "rgba(0,89,181,0.12)"}` : "1px solid transparent"
+                  }}
+                  onMouseEnter={e => { if (!isActive) e.currentTarget.style.background = darkMode ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.03)"; }}
+                  onMouseLeave={e => { if (!isActive) e.currentTarget.style.background = "transparent"; }}>
+                  <AvatarImg c={c} size={44} radius="50%" />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: G.textPrimary, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.nombre}</div>
+                    <div style={{ fontSize: 11, color: G.textTertiary, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{[c.cargo, c.empresa].filter(Boolean).join(" · ") || "Sin cargo"}</div>
+                  </div>
+                  {isActive && <div style={{ width: 8, height: 8, borderRadius: "50%", background: G.green, flexShrink: 0 }} />}
+                </div>
+              );
+            })
           )}
         </div>
       </div>
 
-      {/* Lista de contactos */}
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <input value={search} onChange={e => setSearch(e.target.value)}
-          placeholder="Buscar por nombre, empresa o correo…"
-          style={{ width: "100%", padding: "10px 14px", borderRadius: 12, border: `1px solid ${G.border}`,
-            background: G.surface, fontSize: 13, outline: "none", boxSizing: "border-box",
-            boxShadow: "0 1px 4px rgba(0,0,0,0.04)", marginBottom: 16 }} />
-
-        {filtrados.length === 0 && (
-          <div style={{ textAlign: "center", padding: "60px 0", color: G.textTertiary }}>
-            <div style={{ fontSize: 40, marginBottom: 12 }}>👥</div>
-            <div style={{ fontSize: 14, fontWeight: 700, color: G.textSecondary, marginBottom: 6 }}>
-              {search ? "Sin resultados" : "Sin contactos aún"}
-            </div>
-            <div style={{ fontSize: 12 }}>
-              {search ? "Pruebe con otro término" : "Agregue contactos para que el Asistente pueda enviar correos y mensajes automáticamente"}
-            </div>
+      {/* ── Panel derecho: detalle ── */}
+      <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column", background: darkMode ? G.bg : "#f8fafc" }}>
+        {!detalle ? (
+          <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 12, color: G.textTertiary }}>
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.4 }}><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" /></svg>
+            <span style={{ fontSize: 14, fontWeight: 600 }}>Selecciona un {seccion === "equipo" ? "miembro" : "contacto"}</span>
           </div>
-        )}
-
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {filtrados.map(c => {
-            const av = avatar(c);
-            const isOpen = expandido === c.id;
-            return (
-              <div key={c.id}
-                style={{ background: G.surface, borderRadius: 14, border: `1px solid ${G.border}`,
-                  boxShadow: isOpen ? "0 4px 20px rgba(0,0,0,0.08)" : "0 1px 4px rgba(0,0,0,0.04)",
-                  overflow: "hidden", transition: "box-shadow 0.2s" }}>
-
-                {/* Cabecera del contacto */}
-                <div onClick={() => setExpandido(isOpen ? null : c.id)}
-                  style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 16px", cursor: "pointer" }}>
-                  <div style={{ width: 44, height: 44, borderRadius: "50%", flexShrink: 0,
-                    background: av.color, display: "flex", alignItems: "center", justifyContent: "center",
-                    fontSize: 18, fontWeight: 800, color: "#fff" }}>
-                    {av.initial}
-                  </div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 14, fontWeight: 700, color: G.textPrimary }}>
-                      {c.nombre}
-                    </div>
-                    {(c.empresa || c.cargo) && (
-                      <div style={{ fontSize: 11, color: G.textTertiary, marginTop: 1 }}>
-                        {[c.cargo, c.empresa].filter(Boolean).join(" · ")}
-                      </div>
-                    )}
-                    <div style={{ display: "flex", gap: 10, marginTop: 4, flexWrap: "wrap" }}>
-                      {c.email    && <span style={{ fontSize: 10, color: "#ea4335", fontWeight: 500 }}>✉ {c.email}</span>}
-                      {c.telefono && <span style={{ fontSize: 10, color: G.green,   fontWeight: 500 }}>📞 {c.telefono}</span>}
-                      {c.whatsapp && <span style={{ fontSize: 10, color: "#25d366", fontWeight: 500 }}>💬 {c.whatsapp}</span>}
-                    </div>
-                  </div>
-                  <span style={{ fontSize: 12, color: G.textTertiary, transform: isOpen ? "rotate(180deg)" : "none", transition: "transform 0.2s" }}>▾</span>
+        ) : (() => {
+          const bgColor = avatarColor(detalle);
+          const stColor = ESTADO_COLORS[detalle.estado || "activo"];
+          const isEquipo = seccion === "equipo";
+          return (
+            <div style={{ flex: 1, overflowY: "auto" }}>
+              {/* Banner */}
+              <div style={{ position: "relative", height: 150, background: `linear-gradient(135deg, ${bgColor}22 0%, ${bgColor}08 100%)` }}>
+                <div style={{ position: "absolute", top: 14, right: 20, display: "flex", gap: 8 }}>
+                  <button onClick={() => abrirEditar(detalle)} title="Editar"
+                    style={{ width: 34, height: 34, borderRadius: 10, background: darkMode ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.85)", backdropFilter: "blur(8px)", border: `1px solid ${G.border}`, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, color: G.textSecondary }}
+                    onMouseEnter={e => e.currentTarget.style.background = darkMode ? "rgba(255,255,255,0.15)" : "#fff"}
+                    onMouseLeave={e => e.currentTarget.style.background = darkMode ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.85)"}>
+                    ✏
+                  </button>
                 </div>
+                {/* Avatar flotante */}
+                <div style={{ position: "absolute", bottom: -44, left: 28, width: 88, height: 88, borderRadius: isEquipo ? "50%" : 24, background: darkMode ? "#222" : "#fff", padding: 4, boxShadow: "0 4px 20px rgba(0,0,0,0.15)" }}>
+                  <AvatarImg c={detalle} size={80} radius={isEquipo ? "50%" : "20px"} />
+                  {isEquipo && (
+                    <div style={{
+                      position: "absolute", bottom: 4, right: 4, width: 18, height: 18, borderRadius: "50%",
+                      background: stColor, border: `3px solid ${darkMode ? "#222" : "#fff"}`
+                    }} />
+                  )}
+                </div>
+              </div>
 
-                {/* Panel expandido */}
-                {isOpen && (
-                  <div style={{ borderTop: `1px solid ${G.border}`, padding: "14px 16px 16px" }}>
-                    {c.notas && (
-                      <div style={{ fontSize: 12, color: G.textSecondary, background: G.accentSoft, borderRadius: 8, padding: "8px 12px", marginBottom: 12, fontStyle: "italic" }}>
-                        📝 {c.notas}
-                      </div>
-                    )}
+              {/* Nombre + badges */}
+              <div style={{ paddingLeft: 136, paddingRight: 28, paddingTop: 12, paddingBottom: 16 }}>
+                <div style={{ fontSize: 22, fontWeight: 900, color: G.textPrimary, letterSpacing: "-0.02em" }}>{detalle.nombre}</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 5, flexWrap: "wrap" }}>
+                  {isEquipo && detalle.estado && (
+                    <span style={{ fontSize: 10, fontWeight: 800, padding: "2px 10px", borderRadius: 99, background: `${stColor}18`, border: `1px solid ${stColor}33`, color: stColor, letterSpacing: "0.06em", textTransform: "uppercase" }}>
+                      {ESTADO_LABELS[detalle.estado] || detalle.estado}
+                    </span>
+                  )}
+                  {!isEquipo && <span style={{ fontSize: 10, fontWeight: 800, padding: "2px 10px", borderRadius: 99, background: "rgba(52,199,89,0.1)", border: "1px solid rgba(52,199,89,0.25)", color: G.green, letterSpacing: "0.06em", textTransform: "uppercase" }}>CONTACTO</span>}
+                  {(detalle.empresa || detalle.departamento) && <span style={{ fontSize: 12, color: G.textSecondary }}>{detalle.empresa || detalle.departamento}</span>}
+                  {detalle.cargo && <span style={{ fontSize: 12, color: G.textTertiary }}>{detalle.cargo}</span>}
+                </div>
+              </div>
+
+              {/* Grid info */}
+              <div style={{ padding: "0 24px 40px", display: "grid", gridTemplateColumns: "1fr 180px", gap: 16 }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+
+                  {/* Info */}
+                  <div style={{ background: darkMode ? G.surface : "rgba(255,255,255,0.9)", border: `1px solid ${G.border}`, borderRadius: 20, padding: "20px 22px", boxShadow: "0 2px 12px rgba(0,0,0,0.04)" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16, fontSize: 13, fontWeight: 700, color: G.accent }}>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>
+                      Información
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+                      {[
+                        { label: "EMAIL", value: detalle.email || "—" },
+                        { label: "TELÉFONO", value: detalle.telefono || "—" },
+                        { label: "WHATSAPP", value: detalle.whatsapp || "—" },
+                        { label: isEquipo ? "ÁREA" : "CARGO", value: (isEquipo ? detalle.departamento : detalle.cargo) || "—" },
+                      ].map(f => (
+                        <div key={f.label}>
+                          <div style={{ fontSize: 9, fontWeight: 700, color: G.textTertiary, letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 3 }}>{f.label}</div>
+                          <div style={{ fontSize: 14, fontWeight: 500, color: G.textPrimary }}>{f.value}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Notas + acciones */}
+                  <div style={{ background: darkMode ? G.surface : "rgba(255,255,255,0.9)", border: `1px solid ${G.border}`, borderRadius: 20, padding: "20px 22px", boxShadow: "0 2px 12px rgba(0,0,0,0.04)" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, fontSize: 13, fontWeight: 700, color: G.accent }}>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /></svg>
+                      Notas
+                    </div>
+                    {detalle.notas
+                      ? <div style={{ fontSize: 13, color: G.textSecondary, lineHeight: 1.6, fontStyle: "italic", padding: "10px 14px", background: G.accentSoft, borderRadius: 12, marginBottom: 12 }}>"{detalle.notas}"</div>
+                      : <div style={{ fontSize: 12, color: G.textTertiary, marginBottom: 12 }}>Sin notas registradas</div>}
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                      {c.email && (
-                        <button onClick={() => window.open(`https://mail.google.com/mail/?view=cm&to=${c.email}`, "_blank")}
-                          style={{ padding: "7px 14px", background: "rgba(234,67,53,0.08)", color: "#ea4335", border: "1px solid rgba(234,67,53,0.15)", borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+                      {detalle.email && (
+                        <button onClick={() => window.open(`https://mail.google.com/mail/?view=cm&to=${detalle.email}`, "_blank")}
+                          style={{ padding: "7px 14px", background: "rgba(234,67,53,0.08)", color: "#ea4335", border: "1px solid rgba(234,67,53,0.15)", borderRadius: 10, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
                           ✉ Gmail
                         </button>
                       )}
-                      {(c.whatsapp || c.telefono) && (
-                        <button onClick={() => {
-                          const num = (c.whatsapp || c.telefono).replace(/\D/g, "");
-                          window.open(`https://api.whatsapp.com/send?phone=${num}`, "_blank");
-                        }}
-                          style={{ padding: "7px 14px", background: "rgba(37,211,102,0.08)", color: "#25d366", border: "1px solid rgba(37,211,102,0.15)", borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+                      {(detalle.whatsapp || detalle.telefono) && (
+                        <button onClick={() => { const n = (detalle.whatsapp || detalle.telefono).replace(/\D/g, ""); window.open(`https://api.whatsapp.com/send?phone=${n}`, "_blank"); }}
+                          style={{ padding: "7px 14px", background: "rgba(37,211,102,0.08)", color: "#25d366", border: "1px solid rgba(37,211,102,0.15)", borderRadius: 10, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
                           💬 WhatsApp
                         </button>
                       )}
-                      {c.telefono && (
-                        <button onClick={() => { window.location.href = `tel:${c.telefono}`; }}
-                          style={{ padding: "7px 14px", background: G.greenSoft, color: G.green, border: `1px solid rgba(52,199,89,0.15)`, borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
-                          📞 Llamar
-                        </button>
-                      )}
                       <div style={{ flex: 1 }} />
-                      <button onClick={() => editar(c)}
-                        style={{ padding: "7px 14px", background: G.accentSoft, color: G.accent, border: `1px solid rgba(0,113,227,0.15)`, borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
-                        Editar
-                      </button>
-                      <button onClick={() => eliminar(c.id)}
-                        style={{ padding: "7px 14px", background: G.coralSoft, color: G.coral, border: `1px solid rgba(255,59,48,0.15)`, borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+                      <button onClick={() => eliminar(detalle.id)}
+                        style={{ padding: "7px 14px", background: G.coralSoft, color: G.coral, border: `1px solid rgba(255,59,48,0.15)`, borderRadius: 10, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
                         Eliminar
                       </button>
                     </div>
                   </div>
-                )}
+                </div>
+
+                {/* Columna derecha: atajos */}
+                <div>
+                  <div style={{ background: darkMode ? G.surface : "rgba(255,255,255,0.9)", border: `1px solid ${G.border}`, borderRadius: 20, padding: "18px 16px", boxShadow: "0 2px 12px rgba(0,0,0,0.04)" }}>
+                    <div style={{ fontSize: 9, fontWeight: 800, color: G.textTertiary, letterSpacing: "0.1em", textTransform: "uppercase", textAlign: "center", marginBottom: 12 }}>ATAJOS</div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                      {[
+                        { label: "Mensaje", ico: "💬", action: () => { if (detalle.whatsapp || detalle.telefono) { const n = (detalle.whatsapp || detalle.telefono).replace(/\D/g, ""); window.open(`https://api.whatsapp.com/send?phone=${n}`, "_blank"); } } },
+                        { label: "Llamar", ico: "📞", action: () => detalle.telefono && (window.location.href = `tel:${detalle.telefono}`) },
+                        { label: "Cita", ico: "📅", action: () => { } },
+                        { label: "Correo", ico: "✉", action: () => detalle.email && window.open(`https://mail.google.com/mail/?view=cm&to=${detalle.email}`, "_blank") },
+                      ].map(b => (
+                        <button key={b.label} onClick={b.action}
+                          style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "12px 0", background: darkMode ? "rgba(255,255,255,0.05)" : "#fff", border: `1px solid ${G.border}`, borderRadius: 14, cursor: "pointer", gap: 4, transition: "all 0.15s" }}
+                          onMouseEnter={e => { e.currentTarget.style.borderColor = G.accent; e.currentTarget.style.background = G.accentSoft; }}
+                          onMouseLeave={e => { e.currentTarget.style.borderColor = G.border; e.currentTarget.style.background = darkMode ? "rgba(255,255,255,0.05)" : "#fff"; }}>
+                          <span style={{ fontSize: 18 }}>{b.ico}</span>
+                          <span style={{ fontSize: 9, fontWeight: 700, color: G.textTertiary, textTransform: "uppercase", letterSpacing: "0.06em" }}>{b.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
               </div>
-            );
-          })}
-        </div>
+            </div>
+          );
+        })()}
       </div>
     </div>
   );
@@ -2141,6 +3402,7 @@ function ViewContactos({ contactos, setContactos, darkMode = false }) {
 function CaptureBar({ onCaptura, messages, isLoading }) {
   const [texto, setTexto] = useState("");
   const [grabando, setGrabando] = useState(false);
+  const [micError, setMicError] = useState("");
   const [ripple, setRipple] = useState(false);
   const recognitionRef = useRef(null);
   const textareaRef = useRef(null);
@@ -2230,7 +3492,7 @@ function CaptureBar({ onCaptura, messages, isLoading }) {
                     <Tag color={TIPO_META[m.tipo]?.color}>{TIPO_META[m.tipo]?.label} guardado</Tag>
                   </div>
                 )}
-                {m.content}
+                {safeMessageText(m.content)}
                 {m.role === "assistant" && m.accion && <ActionCard accion={m.accion} />}
                 <div style={{ fontSize: 9, color: m.role === "user" ? "rgba(255,255,255,0.7)" : G.textTertiary, marginTop: 6, textAlign: "right", fontWeight: 500 }}>
                   {fmtTime(m.time)}
@@ -2319,16 +3581,61 @@ function CaptureBar({ onCaptura, messages, isLoading }) {
 
 // ── AI Chat Sidebar ─────────────────────────────────────────────────────────
 
-function AIChatSidebar({ messages, onCaptura, isLoading }) {
+function AIChatSidebar({ messages, onCaptura, isLoading, open, onOpen, onClose, unread, darkMode, voiceConfig }) {
   const [texto, setTexto] = useState("");
   const [grabando, setGrabando] = useState(false);
+  const [micError, setMicError] = useState("");
+  const [micMode, setMicMode] = useState("");
   const chatEndRef = useRef(null);
   const textareaRef = useRef(null);
   const recognitionRef = useRef(null);
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
+  const mediaStreamRef = useRef(null);
+  const lastVoiceSubmitRef = useRef({ text: "", time: 0 });
+  const voiceSubmittedRef = useRef(false);
+  const touchStartX = useRef(null);
+  const touchStartY = useRef(null);
 
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+    if (open) chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, open]);
+
+  // Swipe desde el borde derecho para abrir / swipe derecha para cerrar
+  useEffect(() => {
+    function onTouchStart(e) {
+      touchStartX.current = e.touches[0].clientX;
+      touchStartY.current = e.touches[0].clientY;
+    }
+    function onTouchEnd(e) {
+      if (touchStartX.current === null) return;
+      const dx = e.changedTouches[0].clientX - touchStartX.current;
+      const dy = Math.abs(e.changedTouches[0].clientY - touchStartY.current);
+      if (dy > 60) return; // ignorar scroll vertical
+      const startedAtRightEdge = touchStartX.current > window.innerWidth - 28;
+      if (!open && startedAtRightEdge && dx < -50) { onOpen(); }
+      if (open && dx > 60) { onClose(); }
+      touchStartX.current = null;
+    }
+    document.addEventListener("touchstart", onTouchStart, { passive: true });
+    document.addEventListener("touchend", onTouchEnd, { passive: true });
+    return () => {
+      document.removeEventListener("touchstart", onTouchStart);
+      document.removeEventListener("touchend", onTouchEnd);
+    };
+  }, [open, onOpen, onClose]);
+
+  // Botón de volumen (Android Chrome)
+  useEffect(() => {
+    function onKey(e) {
+      if (e.code === "AudioVolumeUp" || e.code === "AudioVolumeDown") {
+        e.preventDefault();
+        open ? onClose() : onOpen();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onOpen, onClose]);
 
   function autoResize(el) {
     if (!el) return;
@@ -2338,196 +3645,362 @@ function AIChatSidebar({ messages, onCaptura, isLoading }) {
 
   function handleSend() {
     if (!texto.trim()) return;
+    if (isLoading) return;
     onCaptura(texto.trim());
     setTexto("");
-    if (textareaRef.current) {
-      textareaRef.current.style.height = "auto";
+    if (textareaRef.current) textareaRef.current.style.height = "auto";
+  }
+
+  function normalizeVoiceText(text) {
+    return (text || "").trim().replace(/\s+/g, " ");
+  }
+
+  function shouldSubmitVoiceText(text) {
+    const normalized = normalizeVoiceText(text);
+    if (!normalized) return false;
+    const nowMs = Date.now();
+    const last = lastVoiceSubmitRef.current;
+    if (last.text && nowMs - last.time < 12000) {
+      const a = normalized.toLowerCase();
+      const b = last.text.toLowerCase();
+      if (a === b || a.startsWith(b) || b.startsWith(a)) return false;
     }
+    lastVoiceSubmitRef.current = { text: normalized, time: nowMs };
+    return true;
+  }
+
+  function submitVoiceText(text) {
+    const normalized = normalizeVoiceText(text);
+    if (!shouldSubmitVoiceText(normalized)) return;
+    setTexto("");
+    onCaptura(normalized);
   }
 
   function handleKey(e) {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
+  }
+
+  function blobToBase64(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result).split(",")[1] || "");
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  async function transcribeAudioBlob(blob) {
+    const cfg = voiceConfig || {};
+    if (!cfg.apiKey) throw new Error("Configure una API Key para transcribir audio.");
+    const mimeType = blob.type || "audio/webm";
+
+    let transcript = "";
+    if (cfg.provider === "openai") {
+      const base = (cfg.baseUrl || "https://api.openai.com/v1").replace(/\/$/, "");
+      if (base.includes("openrouter.ai")) {
+        throw new Error("OpenRouter no expone un endpoint estándar de transcripción de audio. Use OpenAI directo o Gemini para voz.");
+      }
+      const form = new FormData();
+      form.append("file", blob, `cerebro-voz.${mimeType.includes("mp4") ? "mp4" : "webm"}`);
+      form.append("model", cfg.transcriptionModel || "gpt-4o-mini-transcribe");
+      form.append("language", "es");
+      const res = await fetch(`${base}/audio/transcriptions`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${cfg.apiKey}` },
+        body: form,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error?.message || `Error de transcripción ${res.status}`);
+      transcript = data.text?.trim() || "";
+    } else if (cfg.provider === "gemini" || !cfg.provider) {
+      const base64 = await blobToBase64(blob);
+      const model = cfg.model || "gemini-2.5-flash";
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${cfg.apiKey}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [
+            { inline_data: { mime_type: mimeType, data: base64 } },
+            { text: "Transcribe este audio en español. Devuelve solo el texto transcrito, sin comillas ni explicación." },
+          ] }],
+        }),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error.message || "Error de transcripción");
+      transcript = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "";
+    } else if (cfg.provider === "claude") {
+      throw new Error("Claude no ofrece transcripción de audio directa en esta app. Use dictado nativo del navegador, OpenAI directo o Gemini para voz.");
+    } else {
+      throw new Error(`Proveedor de voz no soportado: ${cfg.provider}`);
+    }
+
+    if (!transcript) throw new Error("No detecté voz en el audio.");
+    return transcript;
+  }
+
+  async function startMediaRecorderFallback() {
+    if (isLoading) {
+      setMicError("Espere a que termine la respuesta actual antes de dictar otra instrucción.");
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      setMicError("Este navegador no permite capturar audio. Abra la app en Chrome o Edge y permita el micrófono.");
+      return;
+    }
+    if (!voiceConfig?.apiKey) {
+      setMicError("Para escuchar sin dictado nativo, configure una API Key compatible en Configuración.");
+      return;
+    }
+    try {
+      voiceSubmittedRef.current = false;
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaStreamRef.current = stream;
+      audioChunksRef.current = [];
+      const recorder = new MediaRecorder(stream);
+      recorder.ondataavailable = event => {
+        if (event.data?.size > 0) audioChunksRef.current.push(event.data);
+      };
+      recorder.onstop = async () => {
+        setMicMode("Procesando audio...");
+        try {
+          const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType || "audio/webm" });
+          const transcript = await transcribeAudioBlob(blob);
+          if (!voiceSubmittedRef.current) {
+            voiceSubmittedRef.current = true;
+            submitVoiceText(transcript);
+          }
+        } catch (e) {
+          setMicError(e.message || "No pude transcribir el audio.");
+        } finally {
+          mediaStreamRef.current?.getTracks?.().forEach(track => track.stop());
+          mediaStreamRef.current = null;
+          mediaRecorderRef.current = null;
+          audioChunksRef.current = [];
+          setGrabando(false);
+          setMicMode("");
+        }
+      };
+      mediaRecorderRef.current = recorder;
+      recorder.start();
+      setGrabando(true);
+      setMicMode("Grabando audio... toque de nuevo para enviar");
+    } catch (e) {
+      setMicError(e.name === "NotAllowedError"
+        ? "Permiso de micrófono denegado. Revise permisos del navegador para este sitio."
+        : `No se pudo iniciar el micrófono: ${e.message}`);
+      setGrabando(false);
+      setMicMode("");
     }
   }
 
   function toggleVoz() {
+    setMicError("");
+    if (isLoading) {
+      setMicError("Espere a que termine la respuesta actual antes de dictar otra instrucción.");
+      return;
+    }
+    if (grabando && mediaRecorderRef.current) {
+      mediaRecorderRef.current.stop();
+      return;
+    }
     if (!("webkitSpeechRecognition" in window || "SpeechRecognition" in window)) {
-      alert("Tu navegador no soporta reconocimiento de voz. Usa Chrome.");
+      startMediaRecorderFallback();
       return;
     }
-    if (grabando) {
-      recognitionRef.current?.stop();
-      setGrabando(false);
-      return;
-    }
+    if (grabando) { recognitionRef.current?.stop(); setGrabando(false); setMicMode(""); return; }
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     const r = new SR();
-    r.lang = "es-CO";
-    r.continuous = false;
-    r.interimResults = false;
-    r.onresult = (e) => { setTexto(e.results[0][0].transcript); setGrabando(false); };
-    r.onerror = () => setGrabando(false);
-    r.onend = () => setGrabando(false);
-    r.start();
-    recognitionRef.current = r;
-    setGrabando(true);
+    r.lang = "es-CO"; r.continuous = false; r.interimResults = false;
+    voiceSubmittedRef.current = false;
+    r.onresult = (e) => {
+      if (voiceSubmittedRef.current) return;
+      const transcript = Array.from(e.results || [])
+        .filter(result => result.isFinal)
+        .map(result => result[0]?.transcript || "")
+        .join(" ")
+        .trim();
+      if (!transcript) return;
+      voiceSubmittedRef.current = true;
+      recognitionRef.current?.stop();
+      setGrabando(false);
+      setMicMode("");
+      submitVoiceText(transcript);
+    };
+    r.onerror = (e) => {
+      setGrabando(false);
+      setMicMode("");
+      const msg = e?.error === "not-allowed"
+        ? "Permiso de micrófono denegado. Revise permisos del navegador para este sitio."
+        : e?.error === "no-speech"
+          ? "No detecté voz. Intente de nuevo hablando cerca del micrófono."
+          : `No pude escuchar el micrófono (${e?.error || "error desconocido"}).`;
+      setMicError(msg);
+    };
+    r.onend = () => { setGrabando(false); setMicMode(""); };
+    try {
+      r.start(); recognitionRef.current = r; setGrabando(true); setMicMode("Escuchando...");
+    } catch (e) {
+      setMicError(`No se pudo iniciar el micrófono: ${e.message}`);
+      setGrabando(false);
+      setMicMode("");
+    }
   }
 
+  const Gai = darkMode
+    ? { textPrimary: "#f1f5f9", textSecondary: "#94a3b8", textTertiary: "#475569", accent: "#3b82f6", green: "#4ade80", coral: "#f87171", border: "rgba(255,255,255,0.08)", inputBg: "rgba(255,255,255,0.07)", headerBg: "rgba(15,23,42,0.97)", msgAiBg: "rgba(255,255,255,0.07)", msgAiBorder: "rgba(255,255,255,0.05)" }
+    : { textPrimary: "#0f172a", textSecondary: "#475569", textTertiary: "#94a3b8", accent: "#2563eb", green: "#16a34a", coral: "#dc2626", border: "#e2e8f0", inputBg: "rgba(255,255,255,0.9)", headerBg: "rgba(255,255,255,0.97)", msgAiBg: "#f8fafc", msgAiBorder: "#e2e8f0" };
+
+  // ── FAB — solo visible cuando el panel está cerrado ──────────────────────
+  if (!open) {
+    return (
+      <button className={`ai-fab${unread > 0 ? " has-unread" : ""}`} onClick={onOpen} title="Abrir Asistente IA (Ctrl+.)">
+        {/* Avatar con punto de estado */}
+        <div style={{ position: "relative", flexShrink: 0 }}>
+          <AsistenteAvatar size={28} state={isLoading ? "thinking" : "idle"} />
+          <div style={{
+            position: "absolute", bottom: 0, right: 0, width: 8, height: 8, borderRadius: "50%",
+            background: isLoading ? "#ff9500" : "#34c759", border: "1.5px solid rgba(255,255,255,0.8)"
+          }} />
+        </div>
+        {/* Texto */}
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", lineHeight: 1.15 }}>
+          <span style={{ fontSize: 13, fontWeight: 800, color: "#fff", letterSpacing: "-0.02em", whiteSpace: "nowrap" }}>
+            Asistente IA
+          </span>
+          <span style={{ fontSize: 9.5, fontWeight: 500, color: "rgba(255,255,255,0.72)", whiteSpace: "nowrap" }}>
+            {isLoading ? "Pensando…" : "Toca para hablar"}
+          </span>
+        </div>
+        {/* Badge no leídos */}
+        {unread > 0 && (
+          <div style={{
+            position: "absolute", top: -5, right: -5, minWidth: 20, height: 20, borderRadius: 99,
+            background: "#ff3b30", border: "2px solid #fff", display: "flex", alignItems: "center", justifyContent: "center",
+            fontSize: 9, fontWeight: 800, color: "#fff", padding: "0 4px"
+          }}>
+            {unread > 9 ? "9+" : unread}
+          </div>
+        )}
+      </button>
+    );
+  }
+
+  // ── Panel abierto ────────────────────────────────────────────────────────
   return (
-    <div className="ai-sidebar" style={{ animation: "slideInSidebar 0.32s cubic-bezier(0.16,1,0.3,1)" }}>
-      {/* Header */}
-      <div style={{
-        padding: "16px 16px 12px",
-        borderBottom: "1px solid rgba(0,0,0,0.06)",
-        background: "rgba(255,255,255,0.6)",
-        display: "flex", alignItems: "center", gap: 10, flexShrink: 0,
-      }}>
-        <AsistenteAvatar size={36} state={isLoading ? "thinking" : "idle"} />
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: G.textPrimary, letterSpacing: "-0.01em" }}>
-            Asistente Cognitivo
-          </div>
-          <div style={{ fontSize: 10, color: isLoading ? G.accent : G.green, fontWeight: 600 }}>
-            {isLoading ? "Procesando…" : "● En línea"}
-          </div>
-        </div>
-      </div>
+    <>
+      {/* Backdrop */}
+      <div className="ai-panel-overlay" onClick={onClose} />
+      <div className="ai-panel">
 
-      {/* Messages scroll area */}
-      <div style={{
-        flex: 1, overflowY: "auto", padding: "14px 12px",
-        display: "flex", flexDirection: "column", gap: 10,
-      }}>
-        {messages.length === 0 && (
-          <div style={{
-            display: "flex", flexDirection: "column", alignItems: "center",
-            justifyContent: "center", height: "100%", gap: 8,
-            color: G.textTertiary, textAlign: "center", padding: "0 16px",
-          }}>
-            <AsistenteAvatar size={48} state="idle" />
-            <div style={{ fontSize: 12, fontWeight: 600, color: G.textSecondary }}>
-              Buenos días, Ing. Ospina
-            </div>
-            <div style={{ fontSize: 11, lineHeight: 1.5 }}>
-              Listo para asistirle. Capture tareas, notas, gastos o simplemente consulte.
-            </div>
-          </div>
-        )}
-        {messages.map((m, i) => (
-          <div key={i} className="slide-in" style={{
-            display: "flex",
-            justifyContent: m.role === "user" ? "flex-end" : "flex-start",
-          }}>
-            <div style={{
-              maxWidth: "88%", padding: "9px 12px",
-              borderRadius: m.role === "user" ? "14px 14px 3px 14px" : "14px 14px 14px 3px",
-              background: m.role === "user"
-                ? "linear-gradient(135deg, #0071e3, #0084ff)"
-                : "rgba(235,235,240,0.9)",
-              border: m.role === "user" ? "none" : "1px solid rgba(0,0,0,0.04)",
-              fontSize: 12, color: m.role === "user" ? "#fff" : G.textPrimary,
-              lineHeight: 1.5,
-              boxShadow: m.role === "user"
-                ? "0 2px 8px rgba(0,113,227,0.15)"
-                : "0 1px 4px rgba(0,0,0,0.04)",
-            }}>
-              {m.role === "assistant" && m.tipo && m.tipo !== "chat" && (
-                <div style={{
-                  display: "flex", alignItems: "center", gap: 5, marginBottom: 5,
-                  fontSize: 10, fontWeight: 700, color: G.accent,
-                }}>
-                  <span style={{
-                    background: G.accentSoft, border: `1px solid rgba(0,113,227,0.12)`,
-                    borderRadius: 6, padding: "1px 6px",
-                  }}>
-                    {m.tipo === "tarea" ? "✓ Tarea" : m.tipo === "nota" ? "✏ Nota" : m.tipo === "gasto" ? "$ Gasto" : m.tipo === "recordatorio" ? "🔔 Recordatorio" : m.tipo}
-                  </span>
-                </div>
-              )}
-              {m.content}
-              {m.role === "assistant" && m.accion && <ActionCard accion={m.accion} />}
-              {m.time && (
-                <div style={{ fontSize: 9, opacity: 0.5, marginTop: 4, textAlign: "right" }}>
-                  {new Date(m.time).toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" })}
-                </div>
-              )}
-            </div>
-          </div>
-        ))}
-        <div ref={chatEndRef} />
-      </div>
-
-      {/* Input area */}
-      <div style={{
-        padding: "10px 12px 14px",
-        borderTop: "1px solid rgba(0,0,0,0.06)",
-        background: "rgba(255,255,255,0.6)",
-        flexShrink: 0,
-      }}>
-        {grabando && (
-          <div style={{
-            textAlign: "center", fontSize: 10, color: G.coral,
-            marginBottom: 6, fontWeight: 600, animation: "pulse 1.2s ease infinite",
-          }}>
-            🎤 ESCUCHANDO…
-          </div>
-        )}
+        {/* Header */}
         <div style={{
-          display: "flex", alignItems: "flex-end", gap: 6,
-          background: "rgba(255,255,255,0.9)",
-          border: "1px solid rgba(0,0,0,0.08)",
-          borderRadius: 14, padding: "8px 10px",
-          boxShadow: "0 1px 4px rgba(0,0,0,0.04)",
+          padding: "14px 14px 11px",
+          borderBottom: `1px solid ${Gai.border}`,
+          background: Gai.headerBg,
+          display: "flex", alignItems: "center", gap: 10, flexShrink: 0,
         }}>
-          <textarea
-            ref={textareaRef}
-            value={texto}
-            onChange={e => { setTexto(e.target.value); autoResize(e.target); }}
-            onKeyDown={handleKey}
-            placeholder="Mensaje al Asistente…"
-            rows={1}
-            style={{
-              flex: 1, border: "none", outline: "none",
-              background: "transparent", resize: "none",
-              fontSize: 12, color: G.textPrimary,
-              lineHeight: 1.5, fontFamily: "Inter",
-              overflowY: "hidden",
-            }}
-          />
-          <button
-            onClick={toggleVoz}
-            style={{
-              width: 30, height: 30, borderRadius: "50%", flexShrink: 0,
-              background: grabando ? G.coral : "rgba(0,0,0,0.04)",
-              color: grabando ? "white" : G.textTertiary,
-              display: "flex", alignItems: "center", justifyContent: "center",
-              border: "none", transition: "all 0.2s",
-            }}
-          >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-              <rect x="9" y="2" width="6" height="12" rx="3" />
-              <path d="M5 10a7 7 0 0 0 14 0M12 19v4M8 23h8" />
-            </svg>
-          </button>
-          <button
-            onClick={handleSend}
-            disabled={!texto.trim() || isLoading}
-            style={{
-              width: 30, height: 30, borderRadius: "50%", flexShrink: 0,
-              background: texto.trim() ? G.accent : "rgba(0,0,0,0.04)",
-              color: texto.trim() ? "white" : G.textTertiary,
-              display: "flex", alignItems: "center", justifyContent: "center",
-              border: "none", transition: "all 0.2s",
-              boxShadow: texto.trim() ? "0 3px 10px rgba(0,113,227,0.25)" : "none",
-            }}
-          >
-            {isLoading ? <Spinner /> : <Icon.send />}
-          </button>
+          <AsistenteAvatar size={36} state={isLoading ? "thinking" : "idle"} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: Gai.textPrimary, letterSpacing: "-0.01em" }}>
+              Asistente Cognitivo
+            </div>
+            <div style={{ fontSize: 10, color: isLoading ? Gai.accent : Gai.green, fontWeight: 600 }}>
+              {isLoading ? "Procesando…" : "● En línea"}
+            </div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontSize: 9, color: Gai.textTertiary, background: Gai.msgAiBg, border: `1px solid ${Gai.border}`, borderRadius: 5, padding: "2px 5px", fontWeight: 600 }}>⌃.</span>
+            <button onClick={onClose} style={{ width: 28, height: 28, borderRadius: "50%", border: "none", background: Gai.msgAiBg, color: Gai.textTertiary, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.15s" }}
+              onMouseEnter={e => e.currentTarget.style.background = darkMode ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.08)"}
+              onMouseLeave={e => e.currentTarget.style.background = Gai.msgAiBg}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+            </button>
+          </div>
+        </div>
+
+        {/* Messages scroll area */}
+        {/* Messages */}
+        <div style={{ flex: 1, overflowY: "auto", padding: "14px 12px", display: "flex", flexDirection: "column", gap: 10 }}>
+          {messages.length === 0 && (
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", gap: 8, color: Gai.textTertiary, textAlign: "center", padding: "0 16px" }}>
+              <AsistenteAvatar size={48} state="idle" />
+              <div style={{ fontSize: 12, fontWeight: 600, color: Gai.textSecondary }}>Buenos días, Ing. Ospina</div>
+              <div style={{ fontSize: 11, lineHeight: 1.5 }}>Listo para asistirle. Capture tareas, notas, gastos o simplemente consulte.</div>
+            </div>
+          )}
+          {messages.map((m, i) => (
+            <div key={i} className="slide-in" style={{ display: "flex", justifyContent: m.role === "user" ? "flex-end" : "flex-start" }}>
+              <div style={{
+                maxWidth: "88%", padding: "9px 12px",
+                borderRadius: m.role === "user" ? "14px 14px 3px 14px" : "14px 14px 14px 3px",
+                background: m.role === "user" ? "linear-gradient(135deg,#1F3A52,#2563eb)" : Gai.msgAiBg,
+                border: m.role === "user" ? "none" : `1px solid ${Gai.msgAiBorder}`,
+                fontSize: 12, color: m.role === "user" ? "#fff" : Gai.textPrimary, lineHeight: 1.5,
+                boxShadow: m.role === "user" ? "0 2px 8px rgba(0,113,227,0.15)" : "0 1px 4px rgba(0,0,0,0.04)",
+              }}>
+                {m.role === "assistant" && m.tipo && m.tipo !== "chat" && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 5, fontSize: 10, fontWeight: 700, color: Gai.accent }}>
+                    <span style={{ background: darkMode ? "rgba(10,132,255,0.15)" : "rgba(0,113,227,0.07)", border: `1px solid rgba(0,113,227,0.12)`, borderRadius: 6, padding: "1px 6px" }}>
+                      {m.tipo === "tarea" ? "✓ Tarea" : m.tipo === "nota" ? "✏ Nota" : m.tipo === "gasto" ? "$ Gasto" : m.tipo === "recordatorio" ? "🔔 Recordatorio" : m.tipo}
+                    </span>
+                  </div>
+                )}
+                {safeMessageText(m.content)}
+                {m.role === "assistant" && m.accion && <ActionCard accion={m.accion} />}
+                {m.time && <div style={{ fontSize: 9, opacity: 0.5, marginTop: 4, textAlign: "right" }}>{new Date(m.time).toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" })}</div>}
+              </div>
+            </div>
+          ))}
+          <div ref={chatEndRef} />
+        </div>
+
+        {/* Input */}
+        <div style={{ padding: "10px 12px 14px", borderTop: `1px solid ${Gai.border}`, background: Gai.headerBg, flexShrink: 0 }}>
+          {grabando && <div style={{ textAlign: "center", fontSize: 10, color: Gai.coral, marginBottom: 6, fontWeight: 600, animation: "pulse 1.2s ease infinite" }}>{micMode || "ESCUCHANDO..."}</div>}
+          {micError && <div style={{ textAlign: "center", fontSize: 10, color: Gai.coral, marginBottom: 6, fontWeight: 600 }}>{micError}</div>}
+          <div style={{ display: "flex", alignItems: "flex-end", gap: 6, background: Gai.inputBg, border: `1px solid ${Gai.border}`, borderRadius: 14, padding: "8px 10px", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
+            <textarea
+              ref={textareaRef}
+              value={texto}
+              onChange={e => { setTexto(e.target.value); autoResize(e.target); }}
+              onKeyDown={handleKey}
+              placeholder="Mensaje al Asistente…"
+              rows={1}
+              style={{ flex: 1, border: "none", outline: "none", background: "transparent", resize: "none", fontSize: 12, color: Gai.textPrimary, lineHeight: 1.5, fontFamily: "Inter", overflowY: "hidden" }}
+            />
+            <button
+              onClick={toggleVoz}
+              style={{
+                width: 30, height: 30, borderRadius: "50%", flexShrink: 0,
+                background: grabando ? G.coral : "rgba(0,0,0,0.04)",
+                color: grabando ? "white" : G.textTertiary,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                border: "none", transition: "all 0.2s",
+              }}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                <rect x="9" y="2" width="6" height="12" rx="3" />
+                <path d="M5 10a7 7 0 0 0 14 0M12 19v4M8 23h8" />
+              </svg>
+            </button>
+            <button
+              onClick={handleSend}
+              disabled={!texto.trim() || isLoading}
+              style={{
+                width: 30, height: 30, borderRadius: "50%", flexShrink: 0,
+                background: texto.trim() ? Gai.accent : (darkMode ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.04)"),
+                color: texto.trim() ? "white" : Gai.textTertiary,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                border: "none", transition: "all 0.2s",
+                boxShadow: texto.trim() ? "0 3px 10px rgba(0,113,227,0.25)" : "none",
+              }}
+            >
+              {isLoading ? <Spinner /> : <Icon.send />}
+            </button>
+          </div>
         </div>
       </div>
-    </div>
+    </>
   );
 }
 
@@ -2571,9 +4044,9 @@ function TaskDetailEditor({ item, items, setItems, onDelete, onClose }) {
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <div>
         <label style={{ fontSize: 11, fontWeight: 700, color: G.textSecondary, display: "block", marginBottom: 6 }}>TÍTULO</label>
-        <input 
-          type="text" 
-          value={titulo} 
+        <input
+          type="text"
+          value={titulo}
           onChange={e => setTitulo(e.target.value)}
           style={{
             width: "100%", padding: "10px 12px", borderRadius: 10,
@@ -2585,8 +4058,8 @@ function TaskDetailEditor({ item, items, setItems, onDelete, onClose }) {
 
       <div>
         <label style={{ fontSize: 11, fontWeight: 700, color: G.textSecondary, display: "block", marginBottom: 6 }}>DESCRIPCIÓN</label>
-        <textarea 
-          value={desc} 
+        <textarea
+          value={desc}
           onChange={e => setDesc(e.target.value)}
           rows={3}
           style={{
@@ -2602,8 +4075,8 @@ function TaskDetailEditor({ item, items, setItems, onDelete, onClose }) {
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
         <div>
           <label style={{ fontSize: 11, fontWeight: 700, color: G.textSecondary, display: "block", marginBottom: 6 }}>TIPO</label>
-          <select 
-            value={tipo} 
+          <select
+            value={tipo}
             onChange={e => setTipo(e.target.value)}
             style={{
               width: "100%", padding: "10px 12px", borderRadius: 10,
@@ -2621,8 +4094,8 @@ function TaskDetailEditor({ item, items, setItems, onDelete, onClose }) {
 
         <div>
           <label style={{ fontSize: 11, fontWeight: 700, color: G.textSecondary, display: "block", marginBottom: 6 }}>ESTADO / COLUMNA</label>
-          <select 
-            value={columna} 
+          <select
+            value={columna}
             onChange={e => setColumna(e.target.value)}
             style={{
               width: "100%", padding: "10px 12px", borderRadius: 10,
@@ -2757,39 +4230,167 @@ function CalendarConnector({
   googleConnectedEmail,
   setGoogleConnected,
   setGoogleConnectedEmail,
-  onConnectGoogle
+  onConnectGoogle,
+  onGmailConnect,
+  onPersistentGmailConnect,
+  onGmailDisconnect,
+  gmailToken,
+  items = [],
+  gmailEmails = [],
+  fetchingEmails = false,
 }) {
   const [emailInput, setEmailInput] = useState(googleConnectedEmail || "");
   const [step, setStep] = useState(googleConnected ? 3 : 1);
   const [subTab, setSubTab] = useState("calendar"); // "calendar" | "gmail"
-  const wsData = getDynamicWorkspaceData(googleConnectedEmail);
+  const [connecting, setConnecting] = useState(false);
+  const [oauthError, setOauthError] = useState(null);
 
-  // Sincronizar estados locales con las propiedades del componente padre
-  useEffect(() => {
-    setStep(googleConnected ? 3 : 1);
-  }, [googleConnected]);
+  useEffect(() => { setStep(googleConnected ? 3 : 1); }, [googleConnected]);
+  useEffect(() => { setEmailInput(googleConnectedEmail || ""); }, [googleConnectedEmail]);
 
-  useEffect(() => {
-    setEmailInput(googleConnectedEmail || "");
-  }, [googleConnectedEmail]);
-
-  const handleSimulateSync = () => {
-    if (!emailInput.includes("@")) {
-      alert("Por favor, ingrese una dirección de correo válida.");
-      return;
+  // Verificar si es una de las cuentas de demostración sugeridas
+  const isDemoEmail = useMemo(() => {
+    const isDemo = ["suelosyestructuras@gmail.com", "javier.ospina@construito.co", "javier.ospina.design@gmail.com"]
+      .includes((googleConnectedEmail || "").toLowerCase().trim());
+    // Si la cuenta está conectada de verdad (tenemos token OAuth local o hay correos reales en gmailEmails),
+    // no la tratamos como demo.
+    if (isDemo && (gmailToken || (gmailEmails && gmailEmails.length > 0))) {
+      return false;
     }
-    setGoogleConnected(true);
-    setGoogleConnectedEmail(emailInput);
-    localStorage.setItem("cerebro_google_connected", "true");
-    localStorage.setItem("cerebro_google_email", emailInput);
-    setStep(3);
+    return isDemo;
+  }, [googleConnectedEmail, gmailEmails, gmailToken]);
+
+  const demoData = useMemo(() => getDynamicWorkspaceData(googleConnectedEmail), [googleConnectedEmail]);
+
+  // Fecha actual en formato local AAAA-MM-DD para evitar diferencias de zona horaria
+  const todayStr = useMemo(() => {
+    const d = new Date();
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }, []);
+
+  // Filtrar eventos de agenda reales (tareas, recordatorios, reuniones activas)
+  const realCalendarItems = useMemo(() => {
+    if (!googleConnected || isDemoEmail) return [];
+    return items.filter(i => (i.tipo === "tarea" || i.tipo === "recordatorio" || i.tipo === "reunion") && !i.hecho);
+  }, [items, googleConnected, isDemoEmail]);
+
+  // Eventos para hoy
+  const todayEvents = useMemo(() => {
+    return realCalendarItems.filter(i => i.fecha && i.fecha.slice(0, 10) === todayStr);
+  }, [realCalendarItems, todayStr]);
+
+  // Eventos futuros (siguientes 5)
+  const upcomingEvents = useMemo(() => {
+    return realCalendarItems
+      .filter(i => i.fecha && i.fecha.slice(0, 10) > todayStr)
+      .sort((a, b) => {
+        const dateA = a.fecha.slice(0, 10);
+        const dateB = b.fecha.slice(0, 10);
+        if (dateA !== dateB) return dateA.localeCompare(dateB);
+        const timeA = a.datos?.hora || a.horaInicio || "";
+        const timeB = b.datos?.hora || b.horaInicio || "";
+        return timeA.localeCompare(timeB);
+      })
+      .slice(0, 5);
+  }, [realCalendarItems, todayStr]);
+
+  // Formatear hora de evento real
+  const formatEventTime = (ev) => {
+    const timePart = ev.datos?.hora || ev.horaInicio || (ev.tipo === "reunion" ? "Grabación" : "Todo el día");
+    const datePart = ev.fecha ? ev.fecha.slice(0, 10) : "";
+    if (datePart === todayStr) {
+      return timePart;
+    }
+    try {
+      const d = new Date(datePart + "T12:00:00");
+      const options = { day: 'numeric', month: 'short' };
+      const dateFormatted = d.toLocaleDateString('es-CO', options);
+      return `${dateFormatted} · ${timePart}`;
+    } catch (e) {
+      return `${datePart} · ${timePart}`;
+    }
+  };
+
+  // Mapear eventos reales
+  const mappedRealEvents = useMemo(() => {
+    const source = todayEvents.length > 0 ? todayEvents : upcomingEvents;
+    return source.map(ev => ({
+      time: formatEventTime(ev),
+      title: ev.datos?.titulo || ev.titulo || ev.texto || "Sin título",
+      loc: ev.datos?.responsable || ev.datos?.descripcion || ev.descripcion || (ev.tipo === "reunion" ? "Grabación de Reunión" : "Sin ubicación"),
+      isReal: true,
+      tipo: ev.tipo
+    }));
+  }, [todayEvents, upcomingEvents, todayStr]);
+
+  // Decidir qué mostrar en el Calendario
+  const displayCalendar = googleConnected && !isDemoEmail ? mappedRealEvents : demoData.calendar;
+  const isFallbackUpcoming = googleConnected && !isDemoEmail && todayEvents.length === 0 && upcomingEvents.length > 0;
+
+  // Clasificador dinámico de badges para correos reales
+  const getBadgeForRealEmail = (email) => {
+    const s = ((email.subj || email.subject || "") + " " + (email.body || email.resumen || email.snippet || "")).toLowerCase();
+    if (s.includes("licencia") || s.includes("radicado") || s.includes("curaduria")) {
+      return { text: "Licencia", bg: "rgba(255,59,48,0.08)", color: "#ff3b30" };
+    }
+    if (s.includes("pago") || s.includes("factura") || s.includes("banco") || s.includes("cotizac") || s.includes("presupuesto")) {
+      return { text: "Finanzas", bg: "rgba(255,149,0,0.08)", color: "#ff9500" };
+    }
+    if (s.includes("plano") || s.includes("dise") || s.includes("estructur") || s.includes("calculo") || s.includes("cimentac") || s.includes("viga") || s.includes("columna")) {
+      return { text: "Ingeniería", bg: "rgba(0,113,227,0.08)", color: "#0071e3" };
+    }
+    if (s.includes("reunion") || s.includes("cita") || s.includes("comite") || s.includes("sesion") || s.includes("llamada")) {
+      return { text: "Reunión", bg: "rgba(124,58,237,0.08)", color: "#7c3aed" };
+    }
+    return { text: "Gmail", bg: "rgba(13,148,136,0.08)", color: "#0d9488" };
+  };
+
+  // Mapear correos reales
+  const mappedRealEmails = useMemo(() => {
+    const activos = gmailEmails.filter(e => !e.eliminado);
+    return activos.map(e => {
+      const badge = getBadgeForRealEmail(e);
+      return {
+        sender: e.sender || e.de || "Desconocido",
+        subj: e.subj || e.asunto || e.subject || "(sin asunto)",
+        body: e.resumen || e.body || e.fragmento || e.snippet || "",
+        badgeBg: badge.bg,
+        badgeColor: badge.color,
+        badgeText: badge.text,
+        time: e.time || ""
+      };
+    });
+  }, [gmailEmails]);
+
+  // Decidir qué mostrar en Gmail
+  const displayGmail = googleConnected && !isDemoEmail ? mappedRealEmails : demoData.gmail;
+
+  const handleOAuth = async () => {
+    setConnecting(true);
+    setOauthError(null);
+    try {
+      if (onPersistentGmailConnect) {
+        await onPersistentGmailConnect();
+      } else {
+        const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+        if (!clientId) throw new Error("Falta VITE_GOOGLE_CLIENT_ID en .env.local.");
+        const token = await requestGmailToken(clientId);
+        const email = await getGmailUserEmail(token);
+        onGmailConnect(token, email);
+      }
+      setStep(3);
+    } catch (e) {
+      setOauthError(e.message || "Error al conectar con Google.");
+    } finally {
+      setConnecting(false);
+    }
   };
 
   const handleDisconnect = () => {
-    setGoogleConnected(false);
-    setGoogleConnectedEmail("");
-    localStorage.setItem("cerebro_google_connected", "false");
-    localStorage.setItem("cerebro_google_email", "");
+    onGmailDisconnect(gmailToken);
     setEmailInput("");
     setStep(1);
   };
@@ -2815,8 +4416,8 @@ function CalendarConnector({
 
           <div>
             <label style={{ fontSize: 11, fontWeight: 700, color: G.textSecondary, display: "block", marginBottom: 6 }}>DIRECCIÓN DE CORREO DE GOOGLE</label>
-            <input 
-              type="email" 
+            <input
+              type="email"
               placeholder="ingrese.su.correo@gmail.com"
               value={emailInput}
               onChange={e => setEmailInput(e.target.value)}
@@ -2861,76 +4462,26 @@ function CalendarConnector({
             ))}
           </div>
 
+          {oauthError && (
+            <div style={{ fontSize: 11.5, color: "#ff3b30", background: "rgba(255,59,48,0.07)", borderRadius: 8, padding: "8px 12px" }}>
+              ⚠ {oauthError}
+            </div>
+          )}
           <button
-            disabled={!emailInput || !emailInput.includes("@")}
-            onClick={() => {
-              setGoogleConnectedEmail(emailInput);
-              setStep(2);
-            }}
+            disabled={connecting}
+            onClick={handleOAuth}
             style={{
               padding: "12px", borderRadius: 12,
-              background: (emailInput && emailInput.includes("@")) ? G.accent : "rgba(0,0,0,0.05)",
-              color: (emailInput && emailInput.includes("@")) ? "#ffffff" : G.textTertiary,
+              background: connecting ? "rgba(0,0,0,0.05)" : G.accent,
+              color: connecting ? G.textTertiary : "#ffffff",
               fontWeight: 600, fontSize: 13, textAlign: "center",
-              boxShadow: (emailInput && emailInput.includes("@")) ? `0 4px 12px rgba(0, 113, 227, 0.15)` : "none",
-              border: "none", cursor: (emailInput && emailInput.includes("@")) ? "pointer" : "default"
+              boxShadow: connecting ? "none" : `0 4px 12px rgba(0, 113, 227, 0.15)`,
+              border: "none", cursor: connecting ? "default" : "pointer"
             }}
           >
-            Iniciar Conexión OAuth
+            {connecting ? "Conectando…" : "Conectar con Google"}
           </button>
         </>
-      )}
-
-      {step === 2 && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <div style={{
-            background: "rgba(0, 113, 227, 0.02)", border: `1px solid ${G.accent}20`,
-            borderRadius: 12, padding: "14px", textAlign: "center"
-          }}>
-            <span style={{ fontSize: 32 }}>🔐</span>
-            <h4 style={{ fontSize: 14, fontWeight: 700, color: G.textPrimary, marginTop: 8 }}>Google Account Sign-In</h4>
-            <p style={{ fontSize: 12, color: G.textSecondary, marginTop: 4, lineHeight: 1.4 }}>
-              Autorización segura de solo lectura para sincronización automática de agendas y bandeja de entrada.
-            </p>
-          </div>
-
-          <div>
-            <label style={{ fontSize: 11, fontWeight: 700, color: G.textSecondary, display: "block", marginBottom: 6 }}>DIRECCIÓN DE CORREO</label>
-            <input 
-              type="email" 
-              placeholder="ejemplo@gmail.com"
-              value={emailInput}
-              onChange={e => setEmailInput(e.target.value)}
-              style={{
-                width: "100%", padding: "12px", borderRadius: 10,
-                border: "1px solid rgba(0, 0, 0, 0.12)", background: "#ffffff",
-                fontSize: 13, color: G.textPrimary, outline: "none"
-              }}
-            />
-          </div>
-
-          <div style={{ display: "flex", gap: 10 }}>
-            <button
-              onClick={() => setStep(1)}
-              style={{
-                flex: 1, padding: "10px", borderRadius: 10, border: "1px solid rgba(0,0,0,0.1)",
-                fontSize: 12, fontWeight: 600, background: "transparent", cursor: "pointer"
-              }}
-            >
-              Atrás
-            </button>
-            <button
-              onClick={handleSimulateSync}
-              style={{
-                flex: 2, padding: "10px", borderRadius: 10, background: G.green, color: "#ffffff",
-                fontSize: 12, fontWeight: 700, border: "none", cursor: "pointer",
-                boxShadow: `0 4px 10px rgba(52,199,89,0.15)`
-              }}
-            >
-              Autorizar e Importar
-            </button>
-          </div>
-        </div>
       )}
 
       {step === 3 && (
@@ -3005,21 +4556,41 @@ function CalendarConnector({
           {/* Calendario Activo */}
           {subTab === "calendar" && (
             <div>
-              <div style={{ fontSize: 11, fontWeight: 700, color: G.textTertiary, letterSpacing: "0.05em", marginBottom: 8, textTransform: "uppercase" }}>AGENDA DE HOY (IMPORTADA)</div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: G.textTertiary, letterSpacing: "0.05em", marginBottom: 8, textTransform: "uppercase" }}>
+                {isFallbackUpcoming ? "PRÓXIMOS EVENTOS (HOY ESTÁ LIBRE)" : "AGENDA DE HOY (IMPORTADA)"}
+              </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                {wsData.calendar.map((ev, i) => (
-                  <div key={i} style={{
-                    padding: "12px", background: "#ffffff", borderRadius: 10,
-                    border: "1px solid rgba(0, 0, 0, 0.04)", borderLeft: `3px solid ${G.accent}`
+                {displayCalendar.length === 0 ? (
+                  <div style={{
+                    padding: "24px 16px",
+                    background: "rgba(0,0,0,0.02)",
+                    borderRadius: 12,
+                    textAlign: "center",
+                    color: G.textTertiary,
+                    border: `1px dashed ${G.border}`
                   }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <span style={{ fontSize: 10, fontWeight: 700, color: G.accent }}>{ev.time}</span>
-                      <span style={{ fontSize: 9, color: G.textTertiary }}>Google Calendar</span>
-                    </div>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: G.textPrimary, marginTop: 4 }}>{ev.title}</div>
-                    <div style={{ fontSize: 10, color: G.textSecondary, marginTop: 2 }}>📍 {ev.loc}</div>
+                    <span style={{ fontSize: 20, display: "block", marginBottom: 6 }}>📅</span>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: G.textSecondary }}>Sin eventos programados</span>
+                    <p style={{ fontSize: 10.5, color: G.textTertiary, margin: "4px 0 0" }}>
+                      No tienes tareas, recordatorios o reuniones pendientes para hoy ni en los próximos días.
+                    </p>
                   </div>
-                ))}
+                ) : (
+                  displayCalendar.map((ev, i) => (
+                    <div key={i} style={{
+                      padding: "12px", background: "#ffffff", borderRadius: 10,
+                      border: "1px solid rgba(0, 0, 0, 0.04)", 
+                      borderLeft: `3px solid ${ev.tipo === "reunion" ? G.purple : ev.tipo === "recordatorio" ? G.amber : G.accent}`
+                    }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <span style={{ fontSize: 10, fontWeight: 700, color: ev.tipo === "reunion" ? G.purple : ev.tipo === "recordatorio" ? G.amber : G.accent }}>{ev.time}</span>
+                        <span style={{ fontSize: 9, color: G.textTertiary }}>{ev.isReal ? (ev.tipo === "reunion" ? "Grabación IA" : "CRM Personal") : "Google Calendar"}</span>
+                      </div>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: G.textPrimary, marginTop: 4 }}>{ev.title}</div>
+                      <div style={{ fontSize: 10, color: G.textSecondary, marginTop: 2 }}>📍 {ev.loc}</div>
+                    </div>
+                  ))
+                )}
               </div>
             </div>
           )}
@@ -3028,7 +4599,7 @@ function CalendarConnector({
           {subTab === "gmail" && (
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: G.textTertiary, letterSpacing: "0.05em", textTransform: "uppercase" }}>CORREOS DETECTADOS POR IA</div>
-              
+
               <div style={{
                 background: "rgba(0,113,227,0.03)",
                 border: "1px solid rgba(0,113,227,0.08)",
@@ -3042,34 +4613,65 @@ function CalendarConnector({
               </div>
 
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                {wsData.gmail.map((m, i) => (
-                  <div key={i} style={{
-                    padding: "12px", background: "#ffffff", borderRadius: 12,
-                    border: "1px solid rgba(0, 0, 0, 0.05)", display: "flex", flexDirection: "column", gap: 6,
-                    boxShadow: "0 2px 6px rgba(0,0,0,0.01)"
+                {fetchingEmails ? (
+                  <div style={{
+                    padding: "24px",
+                    textAlign: "center",
+                    color: G.textSecondary,
+                    fontSize: 12,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 8
                   }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 4 }}>
-                      <div style={{ minWidth: 0, flex: 1 }}>
-                        <div style={{ fontSize: 9.5, fontWeight: 700, color: G.textSecondary, textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap" }}>
-                          {m.sender}
-                        </div>
-                        <div style={{ fontSize: 11, fontWeight: 700, color: G.textPrimary, marginTop: 2, textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap" }}>
-                          {m.subj}
-                        </div>
-                      </div>
-                      <div style={{
-                        padding: "3px 6px", borderRadius: 6, background: m.badgeBg, color: m.badgeColor,
-                        fontSize: 8.5, fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0
-                      }}>
-                        {m.badgeText}
-                      </div>
-                    </div>
-                    
-                    <p style={{ fontSize: 10, color: G.textSecondary, margin: 0, lineHeight: 1.3 }}>
-                      {m.body}
+                    <span style={{ animation: "spin 1s linear infinite", display: "inline-block", fontSize: 16 }}>⟳</span>
+                    Sincronizando bandeja de entrada…
+                  </div>
+                ) : displayGmail.length === 0 ? (
+                  <div style={{
+                    padding: "24px 16px",
+                    background: "rgba(0,0,0,0.02)",
+                    borderRadius: 12,
+                    textAlign: "center",
+                    color: G.textTertiary,
+                    border: `1px dashed ${G.border}`
+                  }}>
+                    <span style={{ fontSize: 20, display: "block", marginBottom: 6 }}>📧</span>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: G.textSecondary }}>Bandeja sin correos</span>
+                    <p style={{ fontSize: 10.5, color: G.textTertiary, margin: "4px 0 0" }}>
+                      No se detectaron correos recientes en esta cuenta de Google.
                     </p>
                   </div>
-                ))}
+                ) : (
+                  displayGmail.map((m, i) => (
+                    <div key={i} style={{
+                      padding: "12px", background: "#ffffff", borderRadius: 12,
+                      border: "1px solid rgba(0, 0, 0, 0.05)", display: "flex", flexDirection: "column", gap: 6,
+                      boxShadow: "0 2px 6px rgba(0,0,0,0.01)"
+                    }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 4 }}>
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                          <div style={{ fontSize: 9.5, fontWeight: 700, color: G.textSecondary, textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap" }}>
+                            {m.sender}
+                          </div>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: G.textPrimary, marginTop: 2, textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap" }}>
+                            {m.subj}
+                          </div>
+                        </div>
+                        <div style={{
+                          padding: "3px 6px", borderRadius: 6, background: m.badgeBg, color: m.badgeColor,
+                          fontSize: 8.5, fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0
+                        }}>
+                          {m.badgeText}
+                        </div>
+                      </div>
+
+                      <p style={{ fontSize: 10, color: G.textSecondary, margin: 0, lineHeight: 1.3 }}>
+                        {m.body}
+                      </p>
+                    </div>
+                  ))
+                )}
               </div>
             </div>
           )}
@@ -3094,7 +4696,15 @@ function RightDrawer({
   googleConnectedEmail,
   setGoogleConnected,
   setGoogleConnectedEmail,
-  onConnectGoogle
+  onConnectGoogle,
+  onGmailConnect,
+  onPersistentGmailConnect,
+  onGmailDisconnect,
+  gmailToken,
+  bankAccounts,
+  setBankAccounts,
+  gmailEmails = [],
+  fetchingEmails = false,
 }) {
   if (!isOpen) return null;
 
@@ -3125,7 +4735,7 @@ function RightDrawer({
               {type === "finance_detail" && "Detalle corporativo de egresos"}
             </p>
           </div>
-          <button 
+          <button
             onClick={onClose}
             style={{
               width: 32, height: 32, borderRadius: "50%",
@@ -3161,21 +4771,28 @@ function RightDrawer({
           )}
 
           {type === "task_detail" && data && (
-            <TaskDetailEditor item={data} items={items} setItems={handleSetItems} onDelete={onDelete} onClose={onClose} />
+            <TaskDetailEditor item={data} items={items} setItems={setItems} onDelete={onDelete} onClose={onClose} />
           )}
 
           {type === "calendar_detail" && (
-            <CalendarConnector 
+            <CalendarConnector
               googleConnected={googleConnected}
               googleConnectedEmail={googleConnectedEmail}
               setGoogleConnected={setGoogleConnected}
               setGoogleConnectedEmail={setGoogleConnectedEmail}
               onConnectGoogle={onConnectGoogle}
+              onGmailConnect={onGmailConnect}
+              onPersistentGmailConnect={onPersistentGmailConnect}
+              onGmailDisconnect={onGmailDisconnect}
+              gmailToken={gmailToken}
+              items={items}
+              gmailEmails={gmailEmails}
+              fetchingEmails={fetchingEmails}
             />
           )}
 
           {type === "finance_detail" && (
-            <FinanceLedger items={items} setItems={handleSetItems} onDelete={onDelete} />
+            <FinanceLedger items={items} setItems={setItems} onDelete={onDelete} bankAccounts={bankAccounts} setBankAccounts={setBankAccounts} />
           )}
         </div>
       </div>
@@ -3192,7 +4809,7 @@ function ContactosPanel() {
 
   function guardar() {
     if (!form.nombre.trim()) return;
-    const nuevo = { id: Math.random().toString(36).slice(2,9), ...form };
+    const nuevo = { id: Math.random().toString(36).slice(2, 9), ...form };
     const updated = [nuevo, ...lista];
     setLista(updated);
     localStorage.setItem("cerebro_contactos", JSON.stringify(updated));
@@ -3252,948 +4869,18 @@ function ContactosPanel() {
   );
 }
 
-// ── Standalone GeneralConfigModal Component ───────────────────────────────
-
-function GeneralConfigModal({
-  isOpen,
-  onClose,
-  apiKey,
-  setApiKey,
-  tempKey,
-  setTempKey,
-  personality,
-  setPersonality,
-  googleConnected,
-  setGoogleConnected,
-  googleConnectedEmail,
-  setGoogleConnectedEmail,
-  googleScopes,
-  setGoogleScopes,
-  outlookConnected,
-  setOutlookConnected,
-  configTab,
-  setConfigTab,
-  simulatingConnection,
-  setSimulatingConnection,
-  simulatingStep,
-  setSimulatingStep,
-  googleConnectionMethod,
-  setGoogleConnectionMethod
-}) {
-  if (!isOpen) return null;
-
-  return (
-    <div style={{
-      position: "absolute", inset: 0,
-      background: "rgba(0, 0, 0, 0.4)",
-      backdropFilter: "blur(8px)",
-      WebkitBackdropFilter: "blur(8px)",
-      zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center",
-      padding: 20, animation: "fadeIn 0.3s ease",
-    }}>
-      <div style={{
-        background: "rgba(255, 255, 255, 0.85)",
-        backdropFilter: "blur(30px)",
-        WebkitBackdropFilter: "blur(30px)",
-        border: "1px solid rgba(0, 0, 0, 0.08)",
-        borderRadius: 20, width: "100%", maxWidth: 420,
-        padding: 24, boxShadow: "0 20px 40px rgba(0,0,0,0.12)",
-        display: "flex", flexDirection: "column", gap: 16,
-        position: "relative", overflow: "hidden"
-      }}>
-        {/* Pantalla de Permisos / Éxito Simulado */}
-        {simulatingConnection && (
-          <div style={{
-            position: "absolute", inset: 0,
-            background: "rgba(255, 255, 255, 0.98)",
-            backdropFilter: "blur(20px)",
-            WebkitBackdropFilter: "blur(20px)",
-            borderRadius: 20, zIndex: 2100,
-            padding: 24, display: "flex", flexDirection: "column",
-            justifyContent: "space-between", animation: "fadeIn 0.3s ease",
-            color: G.textPrimary
-          }}>
-            {simulatingConnection === "google" ? (
-              <>
-                {/* PASO 1: Selección de Método de Conexión */}
-                {simulatingStep === 1 && (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 14, height: "100%", justifyContent: "space-between" }}>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, borderBottom: "1px solid rgba(0,0,0,0.06)", paddingBottom: 10 }}>
-                        <svg width="22" height="22" viewBox="0 0 24 24">
-                          <path fill="#EA4335" d="M12 5.04c1.66 0 3.2.57 4.38 1.69l3.27-3.27C17.68 1.54 14.98 1 12 1 7.35 1 3.37 3.67 1.39 7.56l3.96 3.07C6.31 7.56 8.9 5.04 12 5.04z" />
-                          <path fill="#4285F4" d="M23.49 12.27c0-.81-.07-1.59-.2-2.34H12v4.44h6.44c-.28 1.48-1.11 2.74-2.37 3.58v2.98h3.84c2.24-2.06 3.58-5.1 3.58-8.66z" />
-                          <path fill="#FBBC05" d="M5.35 10.63C5.11 11.37 5 12.17 5 13s.11 1.63.35 2.37l-3.96 3.07C.51 16.89 0 14.99 0 13s.51-3.89 1.39-5.44l3.96 3.07z" />
-                          <path fill="#34A853" d="M12 23c3.24 0 5.97-1.07 7.96-2.91l-3.84-2.98c-1.07.72-2.44 1.15-4.12 1.15-3.1 0-5.69-2.52-6.65-5.59L1.39 15.74C3.37 19.63 7.35 23 12 23z" />
-                        </svg>
-                        <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: "-0.01em" }}>Google Workspace Integration</span>
-                      </div>
-                      
-                      <div>
-                        <h4 style={{ fontSize: 14, fontWeight: 800, color: G.textPrimary, letterSpacing: "-0.02em", marginBottom: 4 }}>
-                          Conectar Google Workspace
-                        </h4>
-                        <p style={{ fontSize: 11, color: G.textSecondary, lineHeight: 1.4 }}>
-                          Seleccione el método para autorizar la lectura de su agenda y correspondencia de forma segura:
-                        </p>
-                      </div>
-
-                      <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 4 }}>
-                        <div
-                          onClick={() => setGoogleConnectionMethod("oauth")}
-                          style={{
-                            border: `2px solid ${googleConnectionMethod === "oauth" ? G.accent : "rgba(0,0,0,0.06)"}`,
-                            background: googleConnectionMethod === "oauth" ? G.accentSoft : "rgba(255,255,255,0.5)",
-                            padding: 12, borderRadius: 14, cursor: "pointer", transition: "all 0.2s",
-                            display: "flex", gap: 10, alignItems: "flex-start"
-                          }}
-                        >
-                          <div style={{ marginTop: 2 }}>
-                            <div style={{ width: 14, height: 14, borderRadius: "50%", border: `2px solid ${googleConnectionMethod === "oauth" ? G.accent : "rgba(0,0,0,0.2)"}`, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                              {googleConnectionMethod === "oauth" && <div style={{ width: 6, height: 6, borderRadius: "50%", background: G.accent }} />}
-                            </div>
-                          </div>
-                          <div>
-                            <div style={{ fontSize: 11, fontWeight: 700, color: G.textPrimary }}>OAuth 2.0 Directo (Recomendado)</div>
-                            <div style={{ fontSize: 9, color: G.textSecondary, marginTop: 2, lineHeight: 1.3 }}>Inicie sesión con su cuenta de Google y otorgue permisos en un solo paso. Rápido y totalmente seguro.</div>
-                          </div>
-                        </div>
-
-                        <div
-                          onClick={() => setGoogleConnectionMethod("service_account")}
-                          style={{
-                            border: `2px solid ${googleConnectionMethod === "service_account" ? G.accent : "rgba(0,0,0,0.06)"}`,
-                            background: googleConnectionMethod === "service_account" ? G.accentSoft : "rgba(255,255,255,0.5)",
-                            padding: 12, borderRadius: 14, cursor: "pointer", transition: "all 0.2s",
-                            display: "flex", gap: 10, alignItems: "flex-start"
-                          }}
-                        >
-                          <div style={{ marginTop: 2 }}>
-                            <div style={{ width: 14, height: 14, borderRadius: "50%", border: `2px solid ${googleConnectionMethod === "service_account" ? G.accent : "rgba(0,0,0,0.2)"}`, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                              {googleConnectionMethod === "service_account" && <div style={{ width: 6, height: 6, borderRadius: "50%", background: G.accent }} />}
-                            </div>
-                          </div>
-                          <div>
-                            <div style={{ fontSize: 11, fontWeight: 700, color: G.textPrimary }}>Cuenta de Servicio (Empresarial)</div>
-                            <div style={{ fontSize: 9, color: G.textSecondary, marginTop: 2, lineHeight: 1.3 }}>Cargue su archivo JSON de credenciales de API para integraciones dedicadas en servidores.</div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-                      <button
-                        onClick={() => setSimulatingStep(2)}
-                        style={{
-                          flex: 1, padding: "10px 14px", borderRadius: 10,
-                          background: G.accent, color: "#ffffff", fontSize: 11, fontWeight: 700,
-                          boxShadow: `0 4px 12px ${G.accentGlow}`, transition: "transform 0.2s"
-                        }}
-                        onMouseEnter={e => e.currentTarget.style.transform = "scale(1.02)"}
-                        onMouseLeave={e => e.currentTarget.style.transform = "scale(1)"}
-                      >
-                        Siguiente paso
-                      </button>
-                      <button
-                        onClick={() => {
-                          setSimulatingConnection(null);
-                          setSimulatingStep(1);
-                        }}
-                        style={{
-                          padding: "10px 14px", borderRadius: 10,
-                          background: "rgba(0,0,0,0.05)", color: G.textSecondary,
-                          fontSize: 11, fontWeight: 600
-                        }}
-                      >
-                        Cancelar
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {/* PASO 2: Selección de Cuenta (Estilo Google Selector) */}
-                {simulatingStep === 2 && (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 14, height: "100%", justifyContent: "space-between" }}>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 12, alignItems: "center", textAlign: "center" }}>
-                      <svg width="28" height="28" viewBox="0 0 24 24" style={{ marginBottom: 4 }}>
-                        <path fill="#EA4335" d="M12 5.04c1.66 0 3.2.57 4.38 1.69l3.27-3.27C17.68 1.54 14.98 1 12 1 7.35 1 3.37 3.67 1.39 7.56l3.96 3.07C6.31 7.56 8.9 5.04 12 5.04z" />
-                        <path fill="#4285F4" d="M23.49 12.27c0-.81-.07-1.59-.2-2.34H12v4.44h6.44c-.28 1.48-1.11 2.74-2.37 3.58v2.98h3.84c2.24-2.06 3.58-5.1 3.58-8.66z" />
-                        <path fill="#FBBC05" d="M5.35 10.63C5.11 11.37 5 12.17 5 13s.11 1.63.35 2.37l-3.96 3.07C.51 16.89 0 14.99 0 13s.51-3.89 1.39-5.44l3.96 3.07z" />
-                        <path fill="#34A853" d="M12 23c3.24 0 5.97-1.07 7.96-2.91l-3.84-2.98c-1.07.72-2.44 1.15-4.12 1.15-3.1 0-5.69-2.52-6.65-5.59L1.39 15.74C3.37 19.63 7.35 23 12 23z" />
-                      </svg>
-                      <h4 style={{ fontSize: 16, fontWeight: 700, color: G.textPrimary, letterSpacing: "-0.02em" }}>
-                        Conectar su cuenta de Google
-                      </h4>
-                      <p style={{ fontSize: 11, color: G.textSecondary, marginTop: -4 }}>
-                        para continuar en Cerebro Personal
-                      </p>
-
-                      <div style={{ width: "100%", textAlign: "left", marginTop: 8 }}>
-                        <label style={{ fontSize: 10, fontWeight: 700, color: G.textSecondary, display: "block", marginBottom: 6 }}>DIRECCIÓN DE CORREO DE GOOGLE</label>
-                        <input
-                          type="email"
-                          placeholder="ingrese.su.correo@gmail.com"
-                          value={googleConnectedEmail || ""}
-                          onChange={(e) => setGoogleConnectedEmail(e.target.value)}
-                          style={{
-                            width: "100%", padding: "10px 12px", borderRadius: 10,
-                            border: "1px solid rgba(0, 0, 0, 0.12)", background: "#ffffff",
-                            fontSize: 12.5, color: G.textPrimary, outline: "none"
-                          }}
-                        />
-                      </div>
-
-                      <div style={{ display: "flex", flexDirection: "column", gap: 6, width: "100%", marginTop: 4 }}>
-                        <div style={{ fontSize: 9.5, fontWeight: 700, color: G.textTertiary, textAlign: "left" }}>O SELECCIONE UNA SUGERENCIA:</div>
-                        {[
-                          { name: "Suelos y Estructuras (Real)", email: "suelosyestructuras@gmail.com", initials: "SE", color: "#34c759" },
-                          { name: "Javier Ospina (Construito)", email: "javier.ospina@construito.co", initials: "JO", color: G.accent },
-                          { name: "Javier Ospina (Personal)", email: "javier.ospina.design@gmail.com", initials: "JP", color: "#e100ff" }
-                        ].map((sug, i) => (
-                          <div
-                            key={i}
-                            onClick={() => {
-                              setGoogleConnectedEmail(sug.email);
-                            }}
-                            style={{
-                              border: `1px solid ${googleConnectedEmail === sug.email ? G.accent : "rgba(0,0,0,0.06)"}`,
-                              background: googleConnectedEmail === sug.email ? G.accentSoft : "rgba(255,255,255,0.8)",
-                              padding: "8px 10px", borderRadius: 10, cursor: "pointer", transition: "all 0.2s",
-                              display: "flex", alignItems: "center", gap: 10, textAlign: "left"
-                            }}
-                            onMouseEnter={e => { if (googleConnectedEmail !== sug.email) e.currentTarget.style.background = "#f2f2f7"; }}
-                            onMouseLeave={e => { if (googleConnectedEmail !== sug.email) e.currentTarget.style.background = "rgba(255,255,255,0.8)"; }}
-                          >
-                            <div style={{
-                              width: 24, height: 24, borderRadius: "50%", background: sug.color, color: "#ffffff",
-                              display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 700
-                            }}>
-                              {sug.initials}
-                            </div>
-                            <div style={{ display: "flex", flexDirection: "column" }}>
-                              <span style={{ fontSize: 10, fontWeight: 700, color: G.textPrimary }}>{sug.name}</span>
-                              <span style={{ fontSize: 8.5, color: G.textTertiary }}>{sug.email}</span>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 12 }}>
-                      <button
-                        onClick={() => setSimulatingStep(1)}
-                        style={{ fontSize: 11, color: G.accent, fontWeight: 600, background: "none", border: "none", cursor: "pointer" }}
-                      >
-                        ← Volver
-                      </button>
-                      <button
-                        disabled={!googleConnectedEmail || !googleConnectedEmail.includes("@")}
-                        onClick={() => setSimulatingStep(3)}
-                        style={{
-                          padding: "8px 16px", borderRadius: 8,
-                          background: (googleConnectedEmail && googleConnectedEmail.includes("@")) ? G.accent : "rgba(0,0,0,0.05)",
-                          color: (googleConnectedEmail && googleConnectedEmail.includes("@")) ? "#ffffff" : G.textTertiary,
-                          fontSize: 11, fontWeight: 700, border: "none", cursor: (googleConnectedEmail && googleConnectedEmail.includes("@")) ? "pointer" : "default"
-                        }}
-                      >
-                        Continuar
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {/* PASO 3: Consentimiento de Permisos Detallados (Inspirado en Foto 1) */}
-                {simulatingStep === 3 && (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 12, height: "100%", overflowY: "auto", paddingRight: 4 }}>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                      <span style={{ fontSize: 9, color: G.textTertiary, textTransform: "uppercase", fontWeight: 700, letterSpacing: "0.05em" }}>Google Consent System</span>
-                      <h4 style={{ fontSize: 13, fontWeight: 800, color: G.textPrimary, letterSpacing: "-0.02em", lineHeight: 1.2 }}>
-                        Selecciona los servicios a los que puede acceder Cerebro Personal
-                      </h4>
-                    </div>
-
-                    {/* Caja de Advertencia e Información de Google */}
-                    <div style={{
-                      background: G.amberSoft,
-                      border: `1px solid ${G.amber}`,
-                      borderRadius: 10,
-                      padding: 8,
-                      fontSize: 9,
-                      color: "#b26600",
-                      lineHeight: 1.3
-                    }}>
-                      <strong>🔒 Privacidad & Control:</strong> Si permites que Cerebro Personal acceda a tus datos de Google Workspace, Google te pedirá que revises periódicamente el acceso de esta app para asegurar su protección. Puedes revocar este acceso en cualquier momento.
-                    </div>
-
-                    {/* Checklist de Permisos */}
-                    <div style={{ display: "flex", flexDirection: "column", gap: 8, background: "rgba(0,0,0,0.02)", padding: 10, borderRadius: 12 }}>
-                      <div style={{ display: "flex", alignItems: "flex-start", gap: 8, paddingBottom: 6, borderBottom: "1px solid rgba(0,0,0,0.04)" }}>
-                        <input
-                          type="checkbox"
-                          checked={googleScopes.calendar}
-                          disabled
-                          style={{ accentColor: G.accent, marginTop: 2 }}
-                        />
-                        <div>
-                          <div style={{ fontSize: 10, fontWeight: 700, color: G.textPrimary }}>Ver, editar, compartir y borrar calendarios (Google Calendar)</div>
-                          <div style={{ fontSize: 8, color: G.textSecondary, marginTop: 1 }}>Requerido para la sincronización del Dashboard ejecutivo.</div>
-                        </div>
-                      </div>
-
-                      <label style={{ display: "flex", alignItems: "flex-start", gap: 8, paddingBottom: 6, borderBottom: "1px solid rgba(0,0,0,0.04)", cursor: "pointer" }}>
-                        <input
-                          type="checkbox"
-                          checked={googleScopes.gmail}
-                          onChange={(e) => setGoogleScopes(prev => ({ ...prev, gmail: e.target.checked }))}
-                          style={{ accentColor: G.accent, marginTop: 2 }}
-                        />
-                        <div>
-                          <div style={{ fontSize: 10, fontWeight: 700, color: G.textPrimary }}>Leer, redactar y borrar correos de Gmail</div>
-                          <div style={{ fontSize: 8, color: G.textSecondary, marginTop: 1 }}>Permite a la IA escanear recibos, vuelos y alertas de bandeja de entrada.</div>
-                        </div>
-                      </label>
-
-                      <label style={{ display: "flex", alignItems: "flex-start", gap: 8, paddingBottom: 6, borderBottom: "1px solid rgba(0,0,0,0.04)", cursor: "pointer" }}>
-                        <input
-                          type="checkbox"
-                          checked={googleScopes.drive}
-                          onChange={(e) => setGoogleScopes(prev => ({ ...prev, drive: e.target.checked }))}
-                          style={{ accentColor: G.accent, marginTop: 2 }}
-                        />
-                        <div>
-                          <div style={{ fontSize: 10, fontWeight: 700, color: G.textPrimary }}>Ver, editar y borrar archivos en Google Drive</div>
-                          <div style={{ fontSize: 8, color: G.textSecondary, marginTop: 1 }}>Para escanear informes estructurales y documentos vinculados.</div>
-                        </div>
-                      </label>
-
-                      <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer" }}>
-                        <input
-                          type="checkbox"
-                          checked={googleScopes.tasks}
-                          onChange={(e) => setGoogleScopes(prev => ({ ...prev, tasks: e.target.checked }))}
-                          style={{ accentColor: G.accent, marginTop: 2 }}
-                        />
-                        <div>
-                          <div style={{ fontSize: 10, fontWeight: 700, color: G.textPrimary }}>Crear, organizar y borrar tareas (Google Tasks)</div>
-                          <div style={{ fontSize: 8, color: G.textSecondary, marginTop: 1 }}>Sincroniza su Kanban de oficina con su lista de tareas móviles.</div>
-                        </div>
-                      </label>
-                    </div>
-
-                    <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
-                      <button
-                        onClick={() => {
-                          setGoogleConnected(true);
-                          setSimulatingStep(4);
-                        }}
-                        style={{
-                          flex: 1, padding: "8px 12px", borderRadius: 8,
-                          background: G.accent, color: "#ffffff", fontSize: 10, fontWeight: 700,
-                          border: "none", boxShadow: `0 3px 8px ${G.accentGlow}`
-                        }}
-                      >
-                        Permitir Acceso
-                      </button>
-                      <button
-                        onClick={() => setSimulatingStep(2)}
-                        style={{
-                          padding: "8px 12px", borderRadius: 8,
-                          background: "rgba(0,0,0,0.05)", color: G.textSecondary,
-                          fontSize: 10, fontWeight: 600
-                        }}
-                      >
-                        Atrás
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {/* PASO 4: Éxito & Orb de Sincronización */}
-                {simulatingStep === 4 && (
-                  <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 16, textAlign: "center", height: "100%", justifyContent: "center" }}>
-                    <div style={{ position: "relative", width: 78, height: 78, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                      {/* Anillo de Sincronización Giratorio */}
-                      <div style={{
-                        position: "absolute", inset: 0, borderRadius: "50%",
-                        border: "3px solid transparent", borderTopColor: G.green,
-                        borderRightColor: G.accent, animation: "spin 2s linear infinite"
-                      }} />
-                      <div style={{
-                        width: 62, height: 62, borderRadius: "50%",
-                        background: "linear-gradient(135deg, #34c759 0%, #0071e3 100%)",
-                        display: "flex", alignItems: "center", justifyContent: "center",
-                        fontSize: 24, color: "#ffffff", boxShadow: `0 10px 24px rgba(52, 199, 89, 0.25)`,
-                        animation: "floatOrb 3s ease-in-out infinite"
-                      }}>
-                        ✓
-                      </div>
-                    </div>
-
-                    <div>
-                      <h3 style={{ fontSize: 15, fontWeight: 800, color: G.textPrimary, letterSpacing: "-0.02em", marginBottom: 6 }}>
-                        ¡Sincronización Completada!
-                      </h3>
-                      <p style={{ fontSize: 11, color: G.textSecondary, lineHeight: 1.4, padding: "0 8px" }}>
-                        Ing. Ospina, me he conectado exitosamente a su cuenta <strong>{googleConnectedEmail}</strong>.
-                      </p>
-                      <div style={{
-                        fontSize: 9, color: G.green, background: G.greenSoft, border: `1px solid ${G.green}`,
-                        padding: "4px 8px", borderRadius: 8, display: "inline-block", marginTop: 8, fontWeight: 700
-                      }}>
-                        Google Calendar Sincronizado en Tiempo Real
-                      </div>
-                    </div>
-
-                    <button
-                      onClick={() => {
-                        setSimulatingConnection(null);
-                        setSimulatingStep(1);
-                        onClose();
-                      }}
-                      style={{
-                        width: "100%", padding: "10px", borderRadius: 10,
-                        background: "linear-gradient(135deg, #0071e3 0%, #34c759 100%)",
-                        color: "#ffffff", fontSize: 11, fontWeight: 700, border: "none",
-                        boxShadow: "0 4px 12px rgba(0, 113, 227, 0.2)", marginTop: 6
-                      }}
-                    >
-                      Ver mi Agenda en el Dashboard
-                    </button>
-                  </div>
-                )}
-              </>
-            ) : (
-              /* Cuentas de Outlook */
-              <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, borderBottom: "1px solid rgba(0,0,0,0.06)", paddingBottom: 12 }}>
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-                    <rect width="24" height="24" rx="5" fill="#0078D4"/>
-                    <path d="M5 8H19V17H5V8Z" fill="white"/>
-                    <path d="M5 8L12 12.5L19 8V9.5L12 14L5 9.5V8Z" fill="#50E6FF"/>
-                  </svg>
-                  <span style={{ fontSize: 13, fontWeight: 700 }}>Microsoft Azure AD</span>
-                </div>
-
-                {simulatingStep === 1 ? (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                    <div>
-                      <h4 style={{ fontSize: 14, fontWeight: 800, color: G.textPrimary, letterSpacing: "-0.01em", marginBottom: 4 }}>
-                        Microsoft 365 solicita permisos
-                      </h4>
-                      <p style={{ fontSize: 11, color: G.textSecondary }}>
-                        Permitirá a la IA escanear y organizar sus eventos y correos de Outlook:
-                      </p>
-                    </div>
-
-                    <div style={{ display: "flex", flexDirection: "column", gap: 10, background: "rgba(0,0,0,0.02)", padding: 12, borderRadius: 10 }}>
-                      <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, cursor: "pointer" }}>
-                        <input type="checkbox" defaultChecked disabled style={{ accentColor: G.accent }} />
-                        <span>Sincronizar correos de Outlook</span>
-                      </label>
-                      <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, cursor: "pointer" }}>
-                        <input type="checkbox" defaultChecked disabled style={{ accentColor: G.accent }} />
-                        <span>Sincronizar eventos de Outlook Calendar</span>
-                      </label>
-                    </div>
-
-                    <p style={{ fontSize: 9, color: G.textTertiary, lineHeight: 1.3 }}>
-                      Al hacer clic en Permitir, consientes que Cerebro Personal procese tus datos de forma confidencial.
-                    </p>
-
-                    <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                      <button
-                        onClick={() => {
-                          setOutlookConnected(true);
-                          setSimulatingStep(2);
-                        }}
-                        style={{
-                          flex: 1, padding: "10px", borderRadius: 10,
-                          background: "#0078d4", color: "#ffffff", fontSize: 12, fontWeight: 600, textAlign: "center",
-                          boxShadow: "0 2px 8px rgba(0,0,0,0.1)"
-                        }}
-                      >
-                        Permitir
-                      </button>
-                      <button
-                        onClick={() => {
-                          setSimulatingConnection(null);
-                          setSimulatingStep(1);
-                        }}
-                        style={{
-                          padding: "10px 14px", borderRadius: 10,
-                          background: "rgba(0,0,0,0.05)", color: G.textSecondary,
-                          fontSize: 12, fontWeight: 600
-                        }}
-                      >
-                        Cancelar
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 16, textAlign: "center" }}>
-                    <div style={{
-                      width: 64, height: 64, borderRadius: "50%",
-                      background: "linear-gradient(135deg, #0078d4 0%, #50e6ff 100%)",
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                      fontSize: 24, color: "#ffffff", boxShadow: "0 10px 24px rgba(0, 120, 212, 0.25)",
-                      animation: "floatOrb 3s ease-in-out infinite"
-                    }}>
-                      ✓
-                    </div>
-
-                    <div>
-                      <h3 style={{ fontSize: 16, fontWeight: 800, color: G.textPrimary, letterSpacing: "-0.01em", marginBottom: 6 }}>
-                        ¡Microsoft Conectado!
-                      </h3>
-                      <p style={{ fontSize: 11, color: G.textSecondary, lineHeight: 1.4, padding: "0 8px" }}>
-                        Ing. Ospina, me he conectado exitosamente a su cuenta de Microsoft 365 para sincronizar su agenda.
-                      </p>
-                    </div>
-
-                    <button
-                      onClick={() => {
-                        setSimulatingConnection(null);
-                        setSimulatingStep(1);
-                        onClose();
-                      }}
-                      style={{
-                        width: "100%", padding: "10px", borderRadius: 10,
-                        background: "#0078d4",
-                        color: "#ffffff", fontSize: 12, fontWeight: 700, border: "none",
-                        boxShadow: "0 4px 12px rgba(0, 120, 212, 0.2)"
-                      }}
-                    >
-                      Continuar
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Encabezado del modal */}
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <span style={{ fontSize: 16, fontWeight: 800, color: G.textPrimary, letterSpacing: "-0.01em" }}>
-            ⚙️ Configuración General
-          </span>
-          <button
-            onClick={onClose}
-            style={{
-              color: G.textTertiary, padding: 4, borderRadius: 6,
-              transition: "all 0.2s",
-            }}
-            onMouseEnter={e => e.currentTarget.style.color = G.textPrimary}
-            onMouseLeave={e => e.currentTarget.style.color = G.textTertiary}
-          >
-            <Icon.x />
-          </button>
-        </div>
-
-        {/* Control de Pestañas */}
-        <div style={{
-          display: "flex",
-          borderBottom: "1px solid rgba(0, 0, 0, 0.06)",
-          paddingBottom: 4,
-          gap: 8
-        }}>
-          <button
-            onClick={() => setConfigTab("api")}
-            style={{
-              fontSize: 12,
-              fontWeight: configTab === "api" ? 700 : 500,
-              color: configTab === "api" ? G.accent : G.textSecondary,
-              padding: "6px 12px",
-              borderRadius: 8,
-              background: configTab === "api" ? G.accentSoft : "transparent",
-              transition: "all 0.2s"
-            }}
-          >
-            🔑 Clave API
-          </button>
-          <button
-            onClick={() => setConfigTab("personality")}
-            style={{
-              fontSize: 12,
-              fontWeight: configTab === "personality" ? 700 : 500,
-              color: configTab === "personality" ? G.accent : G.textSecondary,
-              padding: "6px 12px",
-              borderRadius: 8,
-              background: configTab === "personality" ? G.accentSoft : "transparent",
-              transition: "all 0.2s"
-            }}
-          >
-            👤 Personalidad
-          </button>
-          <button
-            onClick={() => setConfigTab("connections")}
-            style={{
-              fontSize: 12,
-              fontWeight: configTab === "connections" ? 700 : 500,
-              color: configTab === "connections" ? G.accent : G.textSecondary,
-              padding: "6px 12px",
-              borderRadius: 8,
-              background: configTab === "connections" ? G.accentSoft : "transparent",
-              transition: "all 0.2s"
-            }}
-          >
-            🔗 Conexiones
-          </button>
-          <button
-            onClick={() => setConfigTab("contactos")}
-            style={{
-              fontSize: 12,
-              fontWeight: configTab === "contactos" ? 700 : 500,
-              color: configTab === "contactos" ? G.accent : G.textSecondary,
-              padding: "6px 12px",
-              borderRadius: 8,
-              background: configTab === "contactos" ? G.accentSoft : "transparent",
-              transition: "all 0.2s"
-            }}
-          >
-            👥 Contactos
-          </button>
-        </div>
-
-        {/* Contenido Pestaña API */}
-        {configTab === "api" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 12, animation: "fadeIn 0.2s ease" }}>
-            <p style={{ fontSize: 11, color: G.textSecondary, lineHeight: 1.5 }}>
-              Ingrese su clave de API de Google AI Studio para activar las funciones de inteligencia artificial de Cerebro Personal de forma directa.
-            </p>
-
-            <div style={{ position: "relative" }}>
-              <input
-                type="password"
-                value={tempKey}
-                onChange={e => setTempKey(e.target.value)}
-                placeholder="AIzaSy..."
-                style={{
-                  width: "100%", background: "rgba(255, 255, 255, 0.6)",
-                  border: `1px solid ${G.border}`,
-                  borderRadius: 10, padding: "10px 12px",
-                  color: G.textPrimary, fontSize: 13, outline: "none",
-                  fontFamily: "Inter",
-                }}
-              />
-            </div>
-
-            <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
-              <button
-                onClick={() => {
-                  localStorage.setItem("gemini_api_key", tempKey.trim());
-                  setApiKey(tempKey.trim());
-                  if (tempKey.trim()) handleUpsertSettings({ gemini_api_key: tempKey.trim() });
-                  onClose();
-                }}
-                style={{
-                  flex: 1, padding: "10px", borderRadius: 10,
-                  background: G.accent, color: "#ffffff",
-                  fontSize: 12, fontWeight: 600, textAlign: "center",
-                  boxShadow: `0 2px 8px rgba(0, 113, 227, 0.2)`,
-                  transition: "all 0.2s",
-                }}
-                onMouseEnter={e => e.currentTarget.style.transform = "translateY(-1px)"}
-                onMouseLeave={e => e.currentTarget.style.transform = "none"}
-              >
-                Guardar
-              </button>
-              {apiKey && (
-                <button
-                  onClick={() => {
-                    localStorage.removeItem("gemini_api_key");
-                    setApiKey("");
-                    setTempKey("");
-                    onClose();
-                  }}
-                  style={{
-                    padding: "10px 14px", borderRadius: 10,
-                    background: G.coralSoft, color: G.coral,
-                    border: `1px solid rgba(255, 59, 48, 0.15)`,
-                    fontSize: 12, fontWeight: 600,
-                    transition: "all 0.2s",
-                  }}
-                  onMouseEnter={e => {
-                    e.currentTarget.style.background = G.coral;
-                    e.currentTarget.style.color = "#ffffff";
-                  }}
-                >
-                  Borrar
-                </button>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Contenido Pestaña Personalidad */}
-        {configTab === "personality" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 10, animation: "fadeIn 0.2s ease" }}>
-            <p style={{ fontSize: 11, color: G.textSecondary, lineHeight: 1.4 }}>
-              ¿Cómo quieres que me dirija a ti? Modifica el comportamiento e inyección contextual de Cerebro Personal en tiempo real.
-            </p>
-
-            <div style={{
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr",
-              gap: 10,
-              marginTop: 4
-            }}>
-              {/* Card 1: Entrenador */}
-              <div
-                onClick={() => setPersonality("entrenador")}
-                style={{
-                  background: personality === "entrenador" ? "rgba(255, 255, 255, 0.95)" : "rgba(255, 255, 255, 0.50)",
-                  border: personality === "entrenador" ? `2px solid ${G.accent}` : "1px solid rgba(0, 0, 0, 0.06)",
-                  borderRadius: 14,
-                  padding: 10,
-                  cursor: "pointer",
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  textAlign: "center",
-                  gap: 6,
-                  transition: "all 0.2s",
-                  transform: personality === "entrenador" ? "scale(1.02)" : "none",
-                  boxShadow: personality === "entrenador" ? "0 4px 12px rgba(0, 113, 227, 0.08)" : "none"
-                }}
-              >
-                <div style={{
-                  width: 40, height: 40, borderRadius: "50%",
-                  background: "radial-gradient(circle at 30% 30%, #ff5e62 0%, #ff9966 100%)",
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  fontSize: 18, boxShadow: "0 4px 8px rgba(255, 94, 98, 0.2)"
-                }}>🏃‍♂️</div>
-                <div style={{ fontSize: 12, fontWeight: 700, color: G.textPrimary }}>Entrenador directo</div>
-                <div style={{ fontSize: 9, color: G.textTertiary, lineHeight: 1.2 }}>Enérgico y motivador.</div>
-              </div>
-
-              {/* Card 2: Copiloto */}
-              <div
-                onClick={() => setPersonality("copiloto")}
-                style={{
-                  background: personality === "copiloto" ? "rgba(255, 255, 255, 0.95)" : "rgba(255, 255, 255, 0.50)",
-                  border: personality === "copiloto" ? `2px solid ${G.accent}` : "1px solid rgba(0, 0, 0, 0.06)",
-                  borderRadius: 14,
-                  padding: 10,
-                  cursor: "pointer",
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  textAlign: "center",
-                  gap: 6,
-                  transition: "all 0.2s",
-                  transform: personality === "copiloto" ? "scale(1.02)" : "none",
-                  boxShadow: personality === "copiloto" ? "0 4px 12px rgba(0, 113, 227, 0.08)" : "none"
-                }}
-              >
-                <div style={{
-                  width: 40, height: 40, borderRadius: "50%",
-                  background: "radial-gradient(circle at 30% 30%, #56ccf2 0%, #2f80ed 100%)",
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  fontSize: 18, boxShadow: "0 4px 8px rgba(86, 204, 242, 0.2)"
-                }}>😌</div>
-                <div style={{ fontSize: 12, fontWeight: 700, color: G.textPrimary }}>Copiloto tranquilo</div>
-                <div style={{ fontSize: 9, color: G.textTertiary, lineHeight: 1.2 }}>Empático y de apoyo constante.</div>
-              </div>
-
-              {/* Card 3: Profesional */}
-              <div
-                onClick={() => setPersonality("profesional")}
-                style={{
-                  background: personality === "profesional" ? "rgba(255, 255, 255, 0.95)" : "rgba(255, 255, 255, 0.50)",
-                  border: personality === "profesional" ? `2px solid ${G.accent}` : "1px solid rgba(0, 0, 0, 0.06)",
-                  borderRadius: 14,
-                  padding: 10,
-                  cursor: "pointer",
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  textAlign: "center",
-                  gap: 6,
-                  transition: "all 0.2s",
-                  transform: personality === "profesional" ? "scale(1.02)" : "none",
-                  boxShadow: personality === "profesional" ? "0 4px 12px rgba(0, 113, 227, 0.08)" : "none"
-                }}
-              >
-                <div style={{
-                  width: 40, height: 40, borderRadius: "50%",
-                  background: "radial-gradient(circle at 30% 30%, #834d9b 0%, #d04ed6 100%)",
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  fontSize: 18, boxShadow: "0 4px 8px rgba(131, 77, 155, 0.2)"
-                }}>💼</div>
-                <div style={{ fontSize: 12, fontWeight: 700, color: G.textPrimary }}>Profesional eficiente</div>
-                <div style={{ fontSize: 9, color: G.textTertiary, lineHeight: 1.2 }}>Ejecutivo, formal y preciso.</div>
-              </div>
-
-              {/* Card 4: Minimalista */}
-              <div
-                onClick={() => setPersonality("minimalista")}
-                style={{
-                  background: personality === "minimalista" ? "rgba(255, 255, 255, 0.95)" : "rgba(255, 255, 255, 0.50)",
-                  border: personality === "minimalista" ? `2px solid ${G.accent}` : "1px solid rgba(0, 0, 0, 0.06)",
-                  borderRadius: 14,
-                  padding: 10,
-                  cursor: "pointer",
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  textAlign: "center",
-                  gap: 6,
-                  transition: "all 0.2s",
-                  transform: personality === "minimalista" ? "scale(1.02)" : "none",
-                  boxShadow: personality === "minimalista" ? "0 4px 12px rgba(0, 113, 227, 0.08)" : "none"
-                }}
-              >
-                <div style={{
-                  width: 40, height: 40, borderRadius: "50%",
-                  background: "radial-gradient(circle at 30% 30%, #3a7bd5 0%, #3a6073 100%)",
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  fontSize: 18, boxShadow: "0 4px 8px rgba(58, 123, 213, 0.2)"
-                }}>☁️</div>
-                <div style={{ fontSize: 12, fontWeight: 700, color: G.textPrimary }}>Minimalista discreto</div>
-                <div style={{ fontSize: 9, color: G.textTertiary, lineHeight: 1.2 }}>Sobrio, ultra-breve y silencioso.</div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Contenido Pestaña Conexiones */}
-        {configTab === "connections" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 12, animation: "fadeIn 0.2s ease" }}>
-            <p style={{ fontSize: 11, color: G.textSecondary, lineHeight: 1.4, background: "rgba(0,113,227,0.04)", padding: 8, borderRadius: 10, borderLeft: `3px solid ${G.accent}` }}>
-              💬 <strong>ING. OSPINA</strong>... ahora que sé dónde localizarle, solo necesito conectarme a su correo y calendario. Viajes, facturas, reuniones, archivos, enlaces... todo pasa por ahí.
-            </p>
-
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {/* Tarjeta Google */}
-              <div style={{
-                background: "rgba(255,255,255,0.60)",
-                border: "1px solid rgba(0,0,0,0.06)",
-                borderRadius: 12,
-                padding: "10px 12px",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                gap: 8
-              }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <svg width="20" height="20" viewBox="0 0 24 24">
-                    <path fill="#EA4335" d="M12 5.04c1.66 0 3.2.57 4.38 1.69l3.27-3.27C17.68 1.54 14.98 1 12 1 7.35 1 3.37 3.67 1.39 7.56l3.96 3.07C6.31 7.56 8.9 5.04 12 5.04z" />
-                    <path fill="#4285F4" d="M23.49 12.27c0-.81-.07-1.59-.2-2.34H12v4.44h6.44c-.28 1.48-1.11 2.74-2.37 3.58v2.98h3.84c2.24-2.06 3.58-5.1 3.58-8.66z" />
-                    <path fill="#FBBC05" d="M5.35 10.63C5.11 11.37 5 12.17 5 13s.11 1.63.35 2.37l-3.96 3.07C.51 16.89 0 14.99 0 13s.51-3.89 1.39-5.44l3.96 3.07z" />
-                    <path fill="#34A853" d="M12 23c3.24 0 5.97-1.07 7.96-2.91l-3.84-2.98c-1.07.72-2.44 1.15-4.12 1.15-3.1 0-5.69-2.52-6.65-5.59L1.39 15.74C3.37 19.63 7.35 23 12 23z" />
-                  </svg>
-                  <div>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: G.textPrimary }}>Google Workspace</div>
-                    <div style={{ fontSize: 9, color: G.textTertiary }}>Gmail, Calendar, Drive</div>
-                  </div>
-                </div>
-                {googleConnected ? (
-                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
-                    <span style={{ fontSize: 10, color: G.green, fontWeight: 700 }}>✓ Conectado</span>
-                    <button
-                      onClick={() => setGoogleConnected(false)}
-                      style={{ fontSize: 8, color: G.coral, textDecoration: "underline", padding: 2 }}
-                    >
-                      Desconectar
-                    </button>
-                  </div>
-                ) : (
-                  <button
-                    onClick={() => {
-                      setSimulatingConnection("google");
-                      setSimulatingStep(1);
-                    }}
-                    style={{
-                      background: G.accentSoft,
-                      border: `1px solid ${G.accent}`,
-                      color: G.accent,
-                      borderRadius: 8,
-                      padding: "4px 10px",
-                      fontSize: 10,
-                      fontWeight: 700
-                    }}
-                  >
-                    Conectar
-                  </button>
-                )}
-              </div>
-
-              {/* Tarjeta Outlook */}
-              <div style={{
-                background: "rgba(255,255,255,0.60)",
-                border: "1px solid rgba(0,0,0,0.06)",
-                borderRadius: 12,
-                padding: "10px 12px",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                gap: 8
-              }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-                    <rect width="24" height="24" rx="5" fill="#0078D4"/>
-                    <path d="M5 8H19V17H5V8Z" fill="white"/>
-                    <path d="M5 8L12 12.5L19 8V9.5L12 14L5 9.5V8Z" fill="#50E6FF"/>
-                  </svg>
-                  <div>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: G.textPrimary }}>Microsoft 365</div>
-                    <div style={{ fontSize: 9, color: G.textTertiary }}>Outlook Mail & Calendar</div>
-                  </div>
-                </div>
-                {outlookConnected ? (
-                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
-                    <span style={{ fontSize: 10, color: G.green, fontWeight: 700 }}>✓ Conectado</span>
-                    <button
-                      onClick={() => setOutlookConnected(false)}
-                      style={{ fontSize: 8, color: G.coral, textDecoration: "underline", padding: 2 }}
-                    >
-                      Desconectar
-                    </button>
-                  </div>
-                ) : (
-                  <button
-                    onClick={() => {
-                      setSimulatingConnection("outlook");
-                      setSimulatingStep(1);
-                    }}
-                    style={{
-                      background: G.accentSoft,
-                      border: `1px solid ${G.accent}`,
-                      color: G.accent,
-                      borderRadius: 8,
-                      padding: "4px 10px",
-                      fontSize: 10,
-                      fontWeight: 700
-                    }}
-                  >
-                    Conectar
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Contenido Pestaña Contactos */}
-        {configTab === "contactos" && (
-          <div style={{ animation: "fadeIn 0.2s ease" }}>
-            <ContactosPanel />
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
 // ── App principal ──────────────────────────────────────────────────────────
 export default function CerebralApp() {
-  const [session, setSession]     = useState(null);
+  console.log("CerebralApp component is rendering...");
+  const [session, setSession] = useState(null);
   const [authReady, setAuthReady] = useState(false);
-  const [syncing, setSyncing]     = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [syncFailed, setSyncFailed] = useState(false);
   const [vista, setVista] = useState("inicio");
-  const [searchQuery, setSearchQuery] = useState("");
+  const [searchText, setSearchText] = useState("");
+  const [globalSelectedProjectId, setGlobalSelectedProjectId] = useState(null);
+  const [globalClientSearch, setGlobalClientSearch] = useState("");
+  const [isSearchFocused, setIsSearchFocused] = useState(false);
   const [darkMode, setDarkMode] = useState(() => localStorage.getItem("cerebro_dark") === "true");
 
   // G reactivo según el modo
@@ -4207,6 +4894,12 @@ export default function CerebralApp() {
       return [];
     }
   });
+
+  // ── Cuentas bancarias (estado global — compartido con ViewFinanzas) ────────
+  const [bankAccounts, setBankAccounts] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("cerebro_bank_accounts") || "[]"); }
+    catch { return []; }
+  });
   const [messages, setMessages] = useState(() => {
     try {
       const saved = localStorage.getItem("cerebro_messages");
@@ -4216,12 +4909,55 @@ export default function CerebralApp() {
     }
   });
   const [isLoading, setIsLoading] = useState(false);
-  const [apiKey, setApiKey] = useState(() => localStorage.getItem("gemini_api_key") || "");
+  const [apiKey, setApiKey] = useState(() => localStorage.getItem("gemini_api_key") || import.meta.env.VITE_GEMINI_API_KEY || "");
+  const [aiProvider, setAiProvider] = useState(() => localStorage.getItem("ai_provider") || "gemini");
+  const [aiBaseUrl, setAiBaseUrl] = useState(() => localStorage.getItem("ai_base_url") || "https://openrouter.ai/api/v1");
+  const [aiModel, setAiModel] = useState(() => {
+    // Cargar modelo según el proveedor activo
+    const prov = localStorage.getItem("ai_provider") || "gemini";
+    const key = prov === "openai" ? "ai_openai_model" : prov === "claude" ? "ai_claude_model" : "ai_gemini_model";
+    return localStorage.getItem(key) || (prov === "openai" ? import.meta.env.VITE_OPENAI_MODEL : prov === "claude" ? import.meta.env.VITE_CLAUDE_MODEL : import.meta.env.VITE_GEMINI_MODEL) || "";
+  });
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiUnread, setAiUnread] = useState(0);
   const [showConfig, setShowConfig] = useState(false);
-  const [tempKey, setTempKey] = useState(apiKey);
+  const [aiOpenaiKey, setAiOpenaiKey] = useState(() => localStorage.getItem("ai_openai_key") || import.meta.env.VITE_OPENAI_API_KEY || "");
+  const [aiClaudeKey, setAiClaudeKey] = useState(() => localStorage.getItem("ai_claude_key") || import.meta.env.VITE_CLAUDE_API_KEY || "");
+  const [tempKey, setTempKey] = useState(() => {
+    const prov = localStorage.getItem("ai_provider") || "gemini";
+    return prov === "openai"
+      ? (localStorage.getItem("ai_openai_key") || import.meta.env.VITE_OPENAI_API_KEY || "")
+      : prov === "claude"
+      ? (localStorage.getItem("ai_claude_key") || import.meta.env.VITE_CLAUDE_API_KEY || "")
+      : (localStorage.getItem("gemini_api_key") || import.meta.env.VITE_GEMINI_API_KEY || "");
+  });
+  const [tempProvider, setTempProvider] = useState(aiProvider);
+  const [tempBaseUrl, setTempBaseUrl] = useState(aiBaseUrl);
+  const [tempModel, setTempModel] = useState(aiModel);
+  const [testStatus, setTestStatus] = useState("idle"); // "idle"|"loading"|"ok"|"error"
+  const [testMsg, setTestMsg] = useState("");
+  const [orModels, setOrModels] = useState([]); // models fetched live from OpenRouter
+  const [claudeModels, setClaudeModels] = useState([]); // models fetched live from Anthropic
+  const [loadingModels, setLoadingModels] = useState(false);
+  const [tempGeminiKey, setTempGeminiKey] = useState(() => localStorage.getItem("gemini_api_key") || import.meta.env.VITE_GEMINI_API_KEY || "");
   const [personality, setPersonality] = useState(() => localStorage.getItem("cerebro_personality") || "profesional");
   const [googleConnected, setGoogleConnected] = useState(() => localStorage.getItem("cerebro_google_connected") === "true");
   const [googleConnectedEmail, setGoogleConnectedEmail] = useState(() => localStorage.getItem("cerebro_google_email") || "");
+  const [gmailToken, setGmailToken] = useState(() => getStoredToken());
+  const [gmailEmails, setGmailEmails] = useState([]);
+  const [fetchingEmails, setFetchingEmails] = useState(false);
+  const [gmailSyncError, setGmailSyncError] = useState("");
+  const [assistantCRMContext, setAssistantCRMContext] = useState({ clients: [], projects: [], quotes: [] });
+
+  useEffect(() => { localStorage.setItem("gemini_api_key", apiKey || ""); }, [apiKey]);
+  useEffect(() => { localStorage.setItem("ai_openai_key", aiOpenaiKey || ""); }, [aiOpenaiKey]);
+  useEffect(() => { localStorage.setItem("ai_claude_key", aiClaudeKey || ""); }, [aiClaudeKey]);
+  useEffect(() => { localStorage.setItem("ai_provider", aiProvider || "gemini"); }, [aiProvider]);
+  useEffect(() => { localStorage.setItem("ai_base_url", aiBaseUrl || "https://openrouter.ai/api/v1"); }, [aiBaseUrl]);
+  useEffect(() => {
+    const key = aiProvider === "openai" ? "ai_openai_model" : aiProvider === "claude" ? "ai_claude_model" : "ai_gemini_model";
+    localStorage.setItem(key, aiModel || "");
+  }, [aiProvider, aiModel]);
 
   // Nuevos estados del ecosistema de Brite
   const [mood, setMood] = useState(() => localStorage.getItem("cerebro_mood") || "🎯 Enfocado");
@@ -4251,18 +4987,31 @@ export default function CerebralApp() {
 
   // ── Supabase Auth — init de sesión ────────────────────────────────────────
   useEffect(() => {
+    console.log("Initializing Supabase auth session...");
     supabase.auth.getSession().then(({ data }) => {
+      console.log("Supabase session data:", data);
       setSession(data.session);
       setAuthReady(true);
-      if (data.session) initUserData(data.session.user.id);
+      if (data.session) {
+        console.log("User session found, initializing user data...");
+        initUserData(data.session.user.id);
+      } else {
+        console.log("No user session found");
+      }
+    }).catch(err => {
+      console.error("Error getting Supabase session:", err);
+      setAuthReady(true);
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, s) => {
+      console.log("Auth state changed:", event, s);
       setSession(s);
       if (s && (event === "SIGNED_IN" || event === "TOKEN_REFRESHED")) {
+        console.log("User signed in, initializing user data...");
         initUserData(s.user.id);
       }
       if (!s) {
+        console.log("User signed out, clearing data...");
         setSyncing(false);
         setSyncFailed(false);
         // Clear all user data from state to prevent data leakage on shared devices
@@ -4271,7 +5020,6 @@ export default function CerebralApp() {
         setMessages([]);
         setMood("🎯 Enfocado");
         setDiario("");
-        setApiKey("");
         // Clear localStorage keys that belong to the signed-out user
         localStorage.removeItem("cerebro_items");
         localStorage.removeItem("cerebro_contactos");
@@ -4280,7 +5028,6 @@ export default function CerebralApp() {
         localStorage.removeItem("cerebro_diario");
         localStorage.removeItem("cerebro_habits");
         localStorage.removeItem("cerebro_sync_queue");
-        localStorage.removeItem("gemini_api_key");
         if (realtimeChannelRef.current) {
           unsubscribeUserData(realtimeChannelRef.current);
           realtimeChannelRef.current = null;
@@ -4291,7 +5038,7 @@ export default function CerebralApp() {
     const handleOnline = () => {
       supabase.auth.getSession().then(({ data }) => {
         if (data.session?.user?.id) {
-          flushSyncQueue(data.session.user.id).catch(() => {});
+          flushSyncQueue(data.session.user.id).catch(() => { });
         }
       });
     };
@@ -4336,62 +5083,298 @@ export default function CerebralApp() {
 
   // ── Supabase — carga inicial y migración ─────────────────────────────────
   async function initUserData(userId) {
-    if (initInProgressRef.current) return;
+    console.log("Initializing user data for user:", userId);
+    if (initInProgressRef.current) {
+      console.log("Init already in progress, skipping...");
+      return;
+    }
     initInProgressRef.current = true;
     setSyncing(true);
     try {
+      console.log("Migrating local storage to Supabase...");
       await migrateLocalStorageToSupabase(userId);
+      console.log("Loading user data from Supabase...");
       const data = await loadAllUserData(userId);
+      console.log("User data loaded:", data);
 
-      if (data.items.length)     setItems(data.items);
+      if (data.items.length) setItems(data.items);
       if (data.contactos.length) setContactos(data.contactos);
-      if (data.messages.length)  setMessages(data.messages);
+      if (data.messages.length) setMessages(data.messages);
       // Nota: data.eventos existe en Supabase pero el calendario usa items con fecha.
       // La tabla eventos está disponible para extensiones futuras.
 
       if (data.settings) {
+        console.log("Applying user settings...");
         if (data.settings.dark_mode !== undefined) setDarkMode(data.settings.dark_mode);
-        if (data.settings.mood)         setMood(data.settings.mood);
-        if (data.settings.diario)       setDiario(data.settings.diario);
-        if (data.settings.habits)       setHabits(data.settings.habits);
-        if (data.settings.personality)  setPersonality(data.settings.personality);
+        if (data.settings.mood) setMood(data.settings.mood);
+        if (data.settings.diario) setDiario(data.settings.diario);
+        if (data.settings.habits) setHabits(data.settings.habits);
+        if (data.settings.personality) setPersonality(data.settings.personality);
         if (data.settings.google_email) {
           setGoogleConnectedEmail(data.settings.google_email);
           setGoogleConnected(true);
         }
+        // AI Keys
         if (data.settings.gemini_api_key) {
           setApiKey(data.settings.gemini_api_key);
           localStorage.setItem("gemini_api_key", data.settings.gemini_api_key);
+        }
+        if (data.settings.ai_openai_key) {
+          setAiOpenaiKey(data.settings.ai_openai_key);
+          localStorage.setItem("ai_openai_key", data.settings.ai_openai_key);
+        }
+        if (data.settings.ai_claude_key) {
+          setAiClaudeKey(data.settings.ai_claude_key);
+          localStorage.setItem("ai_claude_key", data.settings.ai_claude_key);
+        }
+        // AI Provider, Base URL and Models
+        if (data.settings.ai_provider) {
+          setAiProvider(data.settings.ai_provider);
+          localStorage.setItem("ai_provider", data.settings.ai_provider);
+        }
+        if (data.settings.ai_base_url) {
+          setAiBaseUrl(data.settings.ai_base_url);
+          localStorage.setItem("ai_base_url", data.settings.ai_base_url);
+        }
+        if (data.settings.ai_gemini_model) {
+          localStorage.setItem("ai_gemini_model", data.settings.ai_gemini_model);
+          if (data.settings.ai_provider === "gemini" || (!data.settings.ai_provider && aiProvider === "gemini")) {
+            setAiModel(data.settings.ai_gemini_model);
+          }
+        }
+        if (data.settings.ai_openai_model) {
+          localStorage.setItem("ai_openai_model", data.settings.ai_openai_model);
+          if (data.settings.ai_provider === "openai" || (!data.settings.ai_provider && aiProvider === "openai")) {
+            setAiModel(data.settings.ai_openai_model);
+          }
+        }
+        if (data.settings.ai_claude_model) {
+          localStorage.setItem("ai_claude_model", data.settings.ai_claude_model);
+          if (data.settings.ai_provider === "claude" || (!data.settings.ai_provider && aiProvider === "claude")) {
+            setAiModel(data.settings.ai_claude_model);
+          }
         }
       }
 
       if (realtimeChannelRef.current) unsubscribeUserData(realtimeChannelRef.current);
       realtimeChannelRef.current = subscribeUserData(userId, {
-        onItemsChange:     (newItems)     => setItems(newItems),
+        onItemsChange: (newItems) => setItems(newItems),
         onContactosChange: (newContactos) => setContactos(newContactos),
-        onSettingsChange:  (s) => {
-          if (s.dark_mode    !== undefined) setDarkMode(s.dark_mode);
-          if (s.mood)         setMood(s.mood);
-          if (s.diario)       setDiario(s.diario);
-          if (s.habits)       setHabits(s.habits);
-          if (s.personality)  setPersonality(s.personality);
+        onSettingsChange: (s) => {
+          if (s.dark_mode !== undefined) setDarkMode(s.dark_mode);
+          if (s.mood) setMood(s.mood);
+          if (s.diario) setDiario(s.diario);
+          if (s.habits) setHabits(s.habits);
+          if (s.personality) setPersonality(s.personality);
           if (s.google_email) { setGoogleConnectedEmail(s.google_email); setGoogleConnected(true); }
-          if (s.gemini_api_key) {
-            setApiKey(s.gemini_api_key);
-            localStorage.setItem("gemini_api_key", s.gemini_api_key);
+          // AI Keys sync
+          if (s.gemini_api_key !== undefined && s.gemini_api_key !== null) {
+            if (s.gemini_api_key) {
+              setApiKey(s.gemini_api_key);
+              localStorage.setItem("gemini_api_key", s.gemini_api_key);
+            } else if (s.gemini_api_key === "") {
+              setApiKey("");
+              localStorage.removeItem("gemini_api_key");
+            }
+          }
+          if (s.ai_openai_key !== undefined && s.ai_openai_key !== null) {
+            if (s.ai_openai_key) {
+              setAiOpenaiKey(s.ai_openai_key);
+              localStorage.setItem("ai_openai_key", s.ai_openai_key);
+            } else if (s.ai_openai_key === "") {
+              setAiOpenaiKey("");
+              localStorage.removeItem("ai_openai_key");
+            }
+          }
+          if (s.ai_claude_key !== undefined && s.ai_claude_key !== null) {
+            if (s.ai_claude_key) {
+              setAiClaudeKey(s.ai_claude_key);
+              localStorage.setItem("ai_claude_key", s.ai_claude_key);
+            } else if (s.ai_claude_key === "") {
+              setAiClaudeKey("");
+              localStorage.removeItem("ai_claude_key");
+            }
+          }
+          // AI Provider, Base URL and Models sync
+          if (s.ai_provider !== undefined && s.ai_provider !== null) {
+            setAiProvider(s.ai_provider);
+            localStorage.setItem("ai_provider", s.ai_provider);
+          }
+          if (s.ai_base_url !== undefined && s.ai_base_url !== null) {
+            setAiBaseUrl(s.ai_base_url);
+            localStorage.setItem("ai_base_url", s.ai_base_url);
+          }
+          const activeProv = (s.ai_provider !== undefined && s.ai_provider !== null) ? s.ai_provider : aiProvider;
+          if (s.ai_gemini_model !== undefined && s.ai_gemini_model !== null) {
+            localStorage.setItem("ai_gemini_model", s.ai_gemini_model);
+            if (activeProv === "gemini") setAiModel(s.ai_gemini_model);
+          }
+          if (s.ai_openai_model !== undefined && s.ai_openai_model !== null) {
+            localStorage.setItem("ai_openai_model", s.ai_openai_model);
+            if (activeProv === "openai") setAiModel(s.ai_openai_model);
+          }
+          if (s.ai_claude_model !== undefined && s.ai_claude_model !== null) {
+            localStorage.setItem("ai_claude_model", s.ai_claude_model);
+            if (activeProv === "claude") setAiModel(s.ai_claude_model);
           }
         },
       });
 
-      flushSyncQueue(userId).catch(() => {});
+      console.log("Flushing sync queue...");
+      flushSyncQueue(userId).catch(() => { });
     } catch (err) {
       console.error("[CerebralApp] initUserData error:", err);
       setSyncFailed(true);
     } finally {
+      console.log("User data initialization complete");
       initInProgressRef.current = false;
       setSyncing(false);
     }
   }
+
+  // ── Gmail: fetch + auto-refresh each 15 min ──────────────────────────────
+  // Note: Google OAuth tokens expire in 1 hour — interval must be < 1h
+  const doFetchEmails = useCallback((token) => {
+    if (session?.user?.id) {
+      setFetchingEmails(true);
+      setGmailSyncError("");
+      fetchPersistentGmailEmails({ maxResults: 30, days: 30 })
+        .then(async ({ emails, email }) => {
+          setGmailEmails(emails || []);
+
+          // Intentar resolver el email: 1) del response, 2) localStorage, 3) status endpoint
+          let resolvedEmail = email || localStorage.getItem("cerebro_google_email") || "";
+          if (!resolvedEmail) {
+            try {
+              const status = await getPersistentGmailStatus();
+              if (status?.email) resolvedEmail = status.email;
+              else if (status?.connected && (emails || []).length > 0) {
+                // Conectado pero sin email — marcar como conectado sin email conocido
+                setGoogleConnected(true);
+              }
+            } catch { /* status es opcional — ignorar error */ }
+          }
+          if (resolvedEmail) {
+            setGoogleConnected(true);
+            setGoogleConnectedEmail(resolvedEmail);
+            localStorage.setItem("cerebro_google_connected", "true");
+            localStorage.setItem("cerebro_google_email", resolvedEmail);
+          } else if ((emails || []).length > 0) {
+            setGoogleConnected(true);
+          }
+          setFetchingEmails(false);
+          setGmailSyncError("");
+        })
+        .catch(err => {
+          console.warn("[Gmail persistent] fetch error:", err.message);
+          setFetchingEmails(false);
+          setGmailSyncError(err.message || "No se pudieron sincronizar los correos.");
+          if (!token && !getRawToken()) setGmailEmails([]);
+        });
+      return;
+    }
+
+    // Usa el token pasado directamente — si expiró, el API responde 401
+    // y lo manejamos ahí. NO rechazamos por tiempo local (era el bug).
+    const activeToken = token || getRawToken();
+    if (!activeToken) {
+      setGmailEmails([]);
+      setFetchingEmails(false);
+      setGmailSyncError("La sesión de Gmail no está activa. Reconecte Google para sincronizar correos.");
+      return;
+    }
+    setFetchingEmails(true);
+    setGmailSyncError("");
+    fetchInboxEmails(activeToken, 30)
+      .then(emails => {
+        setGmailEmails(emails);
+        setFetchingEmails(false);
+        setGmailSyncError("");
+      })
+      .catch(async err => {
+        console.warn("[Gmail] fetch error:", err.message);
+        if (err.message === "TOKEN_EXPIRED") {
+          // Intentar renovación silenciosa antes de pedir al usuario
+          const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+          if (clientId) {
+            try {
+              const newToken = await refreshGmailToken(clientId);
+              setGmailToken(newToken);
+              // re-fetch con el nuevo token
+              fetchInboxEmails(newToken, 30)
+                .then(emails => { setGmailEmails(emails); setFetchingEmails(false); })
+                .catch(() => setFetchingEmails(false));
+              return;
+            } catch {
+              // renovación silenciosa falló → pedir reconexión
+            }
+          }
+          setGmailToken(null);
+          clearToken();
+          setGmailEmails([]);
+          setGmailSyncError("La sesión de Gmail expiró. Reconecte Google para sincronizar correos.");
+        } else if (err.message === "SCOPE_INSUFICIENTE") {
+          setGmailSyncError("Faltan permisos de Gmail. Desconecte y conecte Google nuevamente aceptando Gmail.");
+        } else {
+          setGmailSyncError(err.message || "No se pudieron sincronizar los correos.");
+        }
+        setFetchingEmails(false);
+      });
+  }, [session?.user?.id]);
+
+  useEffect(() => {
+    // Si hay sesión Supabase, siempre intentar fetch persistente (el token vive en el servidor)
+    // Solo bloquear si no hay sesión Y no hay gmailToken local
+    if (!gmailToken && !session?.user?.id) { setGmailEmails([]); return; }
+    doFetchEmails(gmailToken);
+    // Refresca solo cuando el usuario está en la pestaña Correos (cada 30 min)
+    // El refresh token de Supabase renueva el acceso automáticamente — no requiere reconexión manual.
+    // Antes: cada 5 min siempre → ~10.000 llamadas/día. Ahora: ~480/día máximo.
+    if (vista !== "correos") return;
+    const interval = setInterval(() => doFetchEmails(gmailToken), 30 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [gmailToken, doFetchEmails, session?.user?.id, googleConnected, vista]);
+
+  const handleRefreshEmails = useCallback(() => doFetchEmails(gmailToken), [gmailToken, doFetchEmails]);
+
+  const handleMarkGmailRead = useCallback((emailId) => {
+    setGmailEmails(prev => prev.map(e => e.id === emailId ? { ...e, leido: true } : e));
+  }, []);
+
+  const handleGmailConnect = useCallback((token, email) => {
+    setGmailToken(token);
+    setGmailSyncError("");
+    setGoogleConnected(true);
+    setGoogleConnectedEmail(email);
+    localStorage.setItem("cerebro_google_connected", "true");
+    localStorage.setItem("cerebro_google_email", email);
+    if (session?.user?.id) handleUpsertSettings({ google_email: email });
+  }, [session]);
+
+  const handlePersistentGmailConnect = useCallback(async () => {
+    const { email } = await startPersistentGmailConnect();
+    setGoogleConnected(true);
+    setGoogleConnectedEmail(email || "");
+    setGmailToken(null);
+    setGmailSyncError("");
+    localStorage.setItem("cerebro_google_connected", "true");
+    if (email) localStorage.setItem("cerebro_google_email", email);
+    if (session?.user?.id && email) handleUpsertSettings({ google_email: email });
+    doFetchEmails(null);
+    return email;
+  }, [doFetchEmails, session?.user?.id]);
+
+  const handleGmailDisconnect = useCallback((token) => {
+    if (session?.user?.id) disconnectPersistentGmail().catch(() => { });
+    revokeGmailToken(token);
+    setGmailToken(null);
+    setGmailEmails([]);
+    setGmailSyncError("");
+    setGoogleConnected(false);
+    setGoogleConnectedEmail("");
+    localStorage.setItem("cerebro_google_connected", "false");
+    localStorage.setItem("cerebro_google_email", "");
+  }, []);
 
   // ── Mutation wrappers optimistas ──────────────────────────────────────────
   // Actualiza state inmediatamente (UI sin lag) y sincroniza con Supabase en background.
@@ -4422,6 +5405,7 @@ export default function CerebralApp() {
   }
 
   function handleUpsertSettings(patch) {
+    if (!patch || !Object.keys(patch).length) return;
     if (session?.user?.id) {
       upsertSettings(patch, session.user.id).catch(err =>
         console.error("[supabase] upsertSettings failed:", err.message)
@@ -4449,15 +5433,21 @@ export default function CerebralApp() {
       hecho: false,
       columna: "cesta",
     };
-    setItems(prev => [newItem, ...prev]);
+    handleSetItems(prev => [newItem, ...prev]);
   };
 
   const handleOpenDrawer = ({ type, data = null }) => {
+    // ia_chat ahora usa el panel flotante, no el drawer
+    if (type === "ia_chat") {
+      setAiOpen(true);
+      setAiUnread(0);
+      type = null; // no abrir el drawer
+    }
     setDrawerType(type);
     setDrawerData(data);
 
     // Briefing automático estilo Asistente Personal al abrir el chat por primera vez
-    if (type === "ia_chat" && messages.length === 0) {
+    if (type === null && messages.length === 0) {
       const ahora = new Date();
       const hoy = new Date(ahora); hoy.setHours(0, 0, 0, 0);
       const hoyStr = ahora.toDateString();
@@ -4471,7 +5461,7 @@ export default function CerebralApp() {
 
       const hora = ahora.getHours();
       const saludo = hora < 12 ? "Buenos días" : hora < 18 ? "Buenas tardes" : "Buenas noches";
-      const fmtP = n => n >= 1_000_000 ? `$${(n/1_000_000).toFixed(1)}M` : n >= 1_000 ? `$${Math.round(n/1_000)}k` : `$${n}`;
+      const fmtP = n => n >= 1_000_000 ? `$${(n / 1_000_000).toFixed(1)}M` : n >= 1_000 ? `$${Math.round(n / 1_000)}k` : `$${n}`;
 
       let texto = `${saludo}, Ing. Ospina.`;
       if (pendientes.length === 0) {
@@ -4512,6 +5502,27 @@ export default function CerebralApp() {
   const historyRef = useRef([]);
   const realtimeChannelRef = useRef(null);
   const initInProgressRef = useRef(false);
+  const assistantCRMRef = useRef(assistantCRMContext);
+  useEffect(() => { assistantCRMRef.current = assistantCRMContext; }, [assistantCRMContext]);
+
+  const loadAssistantCRMContext = useCallback(async () => {
+    try {
+      const [clients, projects, quotes] = await Promise.all([
+        clientsDB.getAll(),
+        projectsDB.getAll(),
+        quotesDB.getAll(),
+      ]);
+      setAssistantCRMContext({ clients, projects, quotes });
+      return { clients, projects, quotes };
+    } catch (e) {
+      console.warn("assistant CRM context:", e.message);
+      return assistantCRMRef.current;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (session?.user?.id) loadAssistantCRMContext();
+  }, [session?.user?.id, loadAssistantCRMContext]);
 
   // Persistir configuración de personalidad en localStorage
   useEffect(() => {
@@ -4529,6 +5540,19 @@ export default function CerebralApp() {
   useEffect(() => { itemsRef.current = items; }, [items]);
   const messagesRef = useRef(messages);
   useEffect(() => { messagesRef.current = messages; }, [messages]);
+  const isLoadingRef = useRef(isLoading);
+  useEffect(() => { isLoadingRef.current = isLoading; }, [isLoading]);
+
+  // Refs para la rutina de correo (usados dentro del tick sin provocar re-renders)
+  const gmailTokenRef = useRef(gmailToken);
+  const aiConfigRef = useRef(null);
+  const gmailEmailsRef = useRef(gmailEmails);
+  useEffect(() => { gmailTokenRef.current = gmailToken; }, [gmailToken]);
+  useEffect(() => {
+    const k = aiProvider === "openai" ? aiOpenaiKey : aiProvider === "claude" ? aiClaudeKey : apiKey;
+    aiConfigRef.current = { apiKey: k, provider: aiProvider, baseUrl: aiBaseUrl, model: aiModel };
+  }, [apiKey, aiOpenaiKey, aiClaudeKey, aiProvider, aiBaseUrl, aiModel]);
+  useEffect(() => { gmailEmailsRef.current = gmailEmails; }, [gmailEmails]);
 
   // Solicitar permisos de notificación al cargar
   useEffect(() => {
@@ -4551,7 +5575,7 @@ export default function CerebralApp() {
     setMessages(prev => [...prev, {
       role: "assistant", content: texto, tipo: "chat", time: new Date().toISOString()
     }]);
-    if (session?.user?.id) appendMessage({ role: "assistant", content: texto }, session.user.id).catch(() => {});
+    if (session?.user?.id) appendMessage({ role: "assistant", content: texto }, session.user.id).catch(() => { });
   }
 
   // Revisar recordatorios individuales de tareas
@@ -4593,7 +5617,7 @@ export default function CerebralApp() {
     const mananaFin = new Date(manana); mananaFin.setHours(23, 59, 59, 999);
     const its = itemsRef.current;
     const tareasManana = its.filter(i => {
-      if (i.hecho || (!i.tipo === "tarea" && i.tipo !== "recordatorio")) return false;
+      if (i.hecho || (i.tipo !== "tarea" && i.tipo !== "recordatorio")) return false;
       if (!i.fecha) return false;
       const f = new Date(i.fecha + "T12:00:00");
       return f >= manana && f <= mananaFin;
@@ -4620,6 +5644,93 @@ export default function CerebralApp() {
 
       // Revisar recordatorios individuales (cada minuto)
       revisarRecordatorios(ahora);
+
+      // ── Rutina automática de correo (7:00 AM y 3:00 PM) ─────────────────────
+      const esRutinaCorreo = (h === 7 && m === 0) || (h === 15 && m === 0);
+      if (esRutinaCorreo) {
+        const turno = h === 7 ? "manana" : "tarde";
+        const claveRutina = `cerebro_rutina_correo_${hoyStr}_${turno}`;
+        if (!localStorage.getItem(claveRutina) && gmailTokenRef.current && aiConfigRef.current?.apiKey) {
+          localStorage.setItem(claveRutina, "1");
+          // Ejecutar en background sin bloquear el tick
+          (async () => {
+            try {
+              const token = gmailTokenRef.current;
+              const cfg = aiConfigRef.current;
+              const horasAtras = h === 7 ? 12 : 8;
+              const correos = await fetchUnreadSince(token, horasAtras, 15);
+              if (!correos.length) {
+                inyectarMensajeAsistente(`📬 Rutina ${h === 7 ? "matutina" : "vespertina"}: Sin correos nuevos no leídos en las últimas ${horasAtras}h.`);
+                return;
+              }
+
+              // Clasificar cada correo con IA
+              const clasificados = [];
+              for (const c of correos) {
+                try {
+                  const resp = await callAI(
+                    `Clasifica este correo en UNA palabra: urgente, responder, info, archivar.
+Urgente: requiere acción o respuesta hoy. Responder: requiere respuesta. Info: solo información. Archivar: newsletter/promo/automático.
+Remitente: ${c.sender} | Asunto: ${c.subj} | Cuerpo: ${(c.body || "").slice(0, 300)}
+Responde SOLO con: urgente, responder, info, o archivar`,
+                    cfg
+                  );
+                  const p = resp.trim().toLowerCase().replace(/[^a-z]/g, "");
+                  const prioridad = ["urgente", "responder", "info", "archivar"].includes(p) ? p : "info";
+                  clasificados.push({ ...c, prioridad });
+                  // Aplicar etiqueta en Gmail
+                  if (c.gmailId) aplicarPrioridadLabel(token, c.gmailId, prioridad).catch(() => { });
+                } catch { clasificados.push({ ...c, prioridad: "info" }); }
+              }
+
+              // Crear borradores para los que necesitan respuesta
+              const paraResponder = clasificados.filter(c => c.prioridad === "urgente" || c.prioridad === "responder");
+              let borradores = 0;
+              for (const c of paraResponder.slice(0, 5)) { // máximo 5 borradores
+                try {
+                  const draft = await callAI(
+                    `Eres el asistente del Ing. Javier Ospina (Ingeniero Civil/Estructural, Colombia). Redacta una respuesta profesional breve en español. Saludo formal, cuerpo conciso (2-4 oraciones), cierre y firma "Ing. Javier Ospina". Sin placeholders.
+Correo a responder: De: ${c.sender} | Asunto: ${c.subj} | Cuerpo: ${(c.body || "").slice(0, 400)}`,
+                    cfg
+                  );
+                  await createDraftAPI(token, {
+                    to: c.senderEmail || c.sender,
+                    subject: c.subj?.startsWith("Re:") ? c.subj : `Re: ${c.subj}`,
+                    body: draft,
+                    threadId: c.threadId,
+                  });
+                  borradores++;
+                } catch { /* no fatal */ }
+              }
+
+              // Resumen final
+              const urgentes = clasificados.filter(c => c.prioridad === "urgente");
+              const responder = clasificados.filter(c => c.prioridad === "responder");
+              const info = clasificados.filter(c => c.prioridad === "info");
+              const archivar = clasificados.filter(c => c.prioridad === "archivar");
+
+              let msg = h === 7
+                ? `📬 Rutina matutina — ${correos.length} correos nuevos procesados:\n`
+                : `📬 Rutina vespertina — ${correos.length} correos nuevos procesados:\n`;
+
+              if (urgentes.length) msg += `🔴 Urgentes (${urgentes.length}): ${urgentes.map(c => `"${c.subj}"`).join(", ")}\n`;
+              if (responder.length) msg += `🟡 Requieren respuesta (${responder.length}): ${responder.map(c => `"${c.subj}"`).join(", ")}\n`;
+              if (info.length) msg += `🔵 Solo información: ${info.length} correo${info.length > 1 ? "s" : ""}\n`;
+              if (archivar.length) msg += `⚪ Archivados: ${archivar.length} correo${archivar.length > 1 ? "s" : ""}\n`;
+              if (borradores > 0) msg += `\n✉️ ${borradores} borrador${borradores > 1 ? "es" : ""} creado${borradores > 1 ? "s" : ""} en Gmail listos para revisar.`;
+              if (urgentes.length === 0 && responder.length === 0) msg += `\n✅ No hay correos urgentes pendientes.`;
+
+              enviarNotifBrowser(
+                h === 7 ? "📬 Rutina matutina completada" : "📬 Rutina vespertina completada",
+                `${correos.length} correos · ${urgentes.length} urgentes · ${borradores} borradores`
+              );
+              inyectarMensajeAsistente(msg);
+            } catch (e) {
+              console.warn("Rutina correo error:", e.message);
+            }
+          })();
+        }
+      }
 
       // Briefing matutino (8:00 AM)
       if (h === 8 && m === 0) {
@@ -4653,16 +5764,24 @@ export default function CerebralApp() {
           manana.setHours(0, 0, 0, 0);
           const mananaFin = new Date(manana); mananaFin.setHours(23, 59, 59, 999);
           const its = itemsRef.current;
+          const crm = assistantCRMRef.current;
           const tareasManana = its.filter(i => {
             if (i.hecho) return false;
             if (!i.fecha) return false;
             const f = new Date(i.fecha + "T12:00:00");
             return f >= manana && f <= mananaFin;
           });
-          if (tareasManana.length > 0) {
+          const fechaManana = manana.toISOString().slice(0, 10);
+          const proyectosManana = (crm.projects || []).filter(p => p.deadline === fechaManana);
+          const cotizacionesManana = (crm.quotes || []).filter(q => q.validUntil === fechaManana);
+          if (tareasManana.length > 0 || proyectosManana.length > 0 || cotizacionesManana.length > 0) {
             const lista = tareasManana.map((t, i) => `${i + 1}. "${t.datos?.titulo || t.texto}"${t.datos?.hora ? ` a las ${t.datos.hora}` : ""}`).join("\n");
-            const msg = `🌙 Buenas noches, Ing. Ospina. Mañana tiene ${tareasManana.length} tarea${tareasManana.length > 1 ? "s" : ""} programada${tareasManana.length > 1 ? "s" : ""}:\n${lista}\n\nLe recomiendo preparar los materiales necesarios esta noche.`;
-            enviarNotifBrowser("🌙 Asistente — Resumen de mañana", `${tareasManana.length} tareas programadas para mañana.`);
+            let msg = `🌙 Buenas noches, Ing. Ospina. Mañana tiene ${tareasManana.length} tarea${tareasManana.length !== 1 ? "s" : ""} programada${tareasManana.length !== 1 ? "s" : ""}.`;
+            if (lista) msg += `\n${lista}`;
+            if (proyectosManana.length) msg += `\n\nProyectos con entrega mañana: ${proyectosManana.map(p => `"${p.name}"`).join(", ")}.`;
+            if (cotizacionesManana.length) msg += `\n\nCotizaciones que vencen mañana: ${cotizacionesManana.map(q => `"${q.name}"`).join(", ")}.`;
+            msg += "\n\nLe recomiendo preparar los materiales necesarios esta noche.";
+            enviarNotifBrowser("🌙 Asistente — Resumen de mañana", `${tareasManana.length} tareas · ${proyectosManana.length} proyectos · ${cotizacionesManana.length} cotizaciones.`);
             inyectarMensajeAsistente(msg);
           }
         }
@@ -4701,7 +5820,7 @@ export default function CerebralApp() {
 
     const interval = setInterval(tick, 60000);
     return () => clearInterval(interval);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -4729,41 +5848,297 @@ export default function CerebralApp() {
     localStorage.setItem("cerebro_items", JSON.stringify(items));
   }, [items]);
 
+  // Persistir cuentas bancarias en localStorage al cambiar
+  useEffect(() => {
+    localStorage.setItem("cerebro_bank_accounts", JSON.stringify(bankAccounts));
+  }, [bankAccounts]);
+
   // Persistir mensajes del chat en localStorage al cambiar
   useEffect(() => {
     localStorage.setItem("cerebro_messages", JSON.stringify(messages));
   }, [messages]);
 
-  // Sincronizar tempKey si cambia la API Key de base
+  // Contar mensajes no leídos del asistente cuando el panel está cerrado
   useEffect(() => {
-    setTempKey(apiKey);
-  }, [apiKey]);
+    if (aiOpen) return;
+    const last = messages[messages.length - 1];
+    if (last && last.role === "assistant") {
+      setAiUnread(n => n + 1);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages.length]);
+
+  // Atajo de teclado Ctrl/Cmd + . para abrir/cerrar el panel
+  useEffect(() => {
+    function onKey(e) {
+      if ((e.metaKey || e.ctrlKey) && e.key === ".") {
+        e.preventDefault();
+        setAiOpen(prev => { if (!prev) setAiUnread(0); return !prev; });
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // Sincronizar campos temp cuando cambian los valores guardados
+  useEffect(() => {
+    setTempKey(aiProvider === "openai" ? aiOpenaiKey : aiProvider === "claude" ? aiClaudeKey : apiKey);
+    setTempGeminiKey(apiKey);
+    setTempProvider(aiProvider);
+    setTempBaseUrl(aiBaseUrl);
+    // Cargar el modelo del proveedor activo
+    const mk = aiProvider === "openai" ? "ai_openai_model" : aiProvider === "claude" ? "ai_claude_model" : "ai_gemini_model";
+    const savedModel = localStorage.getItem(mk) || "";
+    setTempModel(savedModel);
+    setTestStatus("idle"); setTestMsg("");
+  }, [apiKey, aiOpenaiKey, aiClaudeKey, aiProvider, aiBaseUrl, aiModel]);
+
+  async function handleTestAI() {
+    if (!tempKey.trim()) { setTestStatus("error"); setTestMsg("Ingresa una API Key primero."); return; }
+    setTestStatus("loading"); setTestMsg("");
+    try {
+      let text = "";
+      const prompt = "Responde únicamente la palabra OK.";
+      if (tempProvider === "claude") {
+        const mod = tempModel || "claude-sonnet-4-6";
+        const r = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-api-key": tempKey.trim(), "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
+          body: JSON.stringify({ model: mod, max_tokens: 10, messages: [{ role: "user", content: prompt }] }),
+        });
+        if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e?.error?.message ?? `Error ${r.status}`); }
+        const d = await r.json();
+        text = d.content?.[0]?.text?.trim() ?? "";
+      } else if (tempProvider === "openai") {
+        const base = (tempBaseUrl || "https://openrouter.ai/api/v1").replace(/\/$/, "");
+        const mod = tempModel || "gpt-4o-mini";
+        const r = await fetch(`${base}/chat/completions`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json", "Authorization": `Bearer ${tempKey.trim()}`,
+            "HTTP-Referer": window.location.origin, "X-Title": "Cerebro Personal"
+          },
+          body: JSON.stringify({ model: mod, messages: [{ role: "user", content: prompt }], max_tokens: 10 }),
+        });
+        if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e?.error?.message ?? `Error ${r.status}`); }
+        const d = await r.json();
+        text = d.choices?.[0]?.message?.content?.trim() ?? "";
+      } else {
+        const mod = tempModel || "gemini-2.5-flash";
+        const r = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${mod}:generateContent?key=${tempKey.trim()}`,
+          {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { maxOutputTokens: 10 } })
+          }
+        );
+        if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e?.error?.message ?? `Error ${r.status}`); }
+        const d = await r.json();
+        text = d.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? "";
+      }
+      setTestStatus("ok");
+      setTestMsg(text ? `✓ Respuesta: "${text}"` : "✓ Conexión exitosa");
+    } catch (e) {
+      setTestStatus("error");
+      setTestMsg(e.message ?? "Error desconocido");
+    }
+  }
+
+  async function handleLoadModels() {
+    if (!tempKey.trim()) return;
+    setLoadingModels(true);
+    setOrModels([]);
+    try {
+      const r = await fetch("https://openrouter.ai/api/v1/models", {
+        headers: { "Authorization": `Bearer ${tempKey.trim()}` }
+      });
+      if (!r.ok) throw new Error(`Error ${r.status}`);
+      const d = await r.json();
+      const free = (d.data ?? [])
+        .filter(m => m.pricing?.prompt === "0" && m.pricing?.completion === "0")
+        .map(m => ({ label: m.name || m.id, model: m.id }))
+        .sort((a, b) => a.label.localeCompare(b.label));
+      setOrModels(free.length ? free : []);
+    } catch (e) {
+      setOrModels([]);
+      setTestStatus("error");
+      setTestMsg(`Error cargando modelos: ${e.message}`);
+    } finally {
+      setLoadingModels(false);
+    }
+  }
+
+  async function handleLoadClaudeModels() {
+    if (!tempKey.trim()) return;
+    setLoadingModels(true);
+    setClaudeModels([]);
+    try {
+      const r = await fetch("https://api.anthropic.com/v1/models", {
+        headers: {
+          "x-api-key": tempKey.trim(),
+          "anthropic-version": "2023-06-01",
+          "anthropic-dangerous-direct-browser-access": "true",
+        }
+      });
+      if (!r.ok) throw new Error(`Error ${r.status}`);
+      const d = await r.json();
+      const list = (d.data ?? [])
+        .map(m => ({ label: m.display_name || m.id, model: m.id }))
+        .sort((a, b) => b.model.localeCompare(a.model)); // más reciente primero
+      setClaudeModels(list.length ? list : []);
+    } catch (e) {
+      setClaudeModels([]);
+      setTestStatus("error");
+      setTestMsg(`Error cargando modelos Claude: ${e.message}`);
+    } finally {
+      setLoadingModels(false);
+    }
+  }
+
+  function buildAssistantAppContext() {
+    return {
+      crm: assistantCRMRef.current,
+      gmailEmails: gmailEmailsRef.current,
+      googleConnectedEmail,
+      bankAccounts,
+      contactos,
+      gmailToken,
+    };
+  }
+
+  async function applyCRMIntent(item) {
+    const datos = item?.datos || {};
+    if (item.tipo === "cliente") {
+      if (!datos.clienteNombre && !datos.titulo) return "Falta el nombre del cliente.";
+      await clientsDB.create({
+        name: datos.clienteNombre || datos.titulo,
+        identification: datos.identification || "",
+        contactPerson: datos.contactPerson || datos.clienteNombre || "",
+        type: datos.type || "Particular",
+        address: datos.address || "",
+        contactEmail: datos.contactEmail || "",
+        phone: datos.telefono || datos.phone || "",
+      });
+      await loadAssistantCRMContext();
+      return `Cliente CRM creado: ${datos.clienteNombre || datos.titulo}.`;
+    }
+    if (item.tipo === "proyecto") {
+      const clientId = datos.clienteId || "";
+      if (!datos.proyectoNombre && !datos.titulo) return "Falta el nombre del proyecto.";
+      await projectsDB.create({
+        invoiceNumber: 0,
+        name: datos.proyectoNombre || datos.titulo,
+        type: datos.type || "Otro",
+        clientId,
+        valueWithoutTax: Number(datos.valor || datos.monto || 0),
+        services: Array.isArray(datos.servicios) ? datos.servicios : [],
+        status: datos.estado || PROJECT_STATUSES[0],
+        responsibleIds: [],
+        startDate: datos.fechaInicio || new Date().toISOString().slice(0, 10),
+        deadline: datos.fechaEntrega || datos.fecha || "",
+        progress: 0,
+        checklist: [],
+      });
+      await loadAssistantCRMContext();
+      return `Proyecto CRM creado: ${datos.proyectoNombre || datos.titulo}.`;
+    }
+    if (item.tipo === "cotizacion") {
+      if (!datos.proyectoNombre && !datos.titulo) return "Falta el nombre de la cotización.";
+      const services = Array.isArray(datos.servicios) && datos.servicios.length
+        ? datos.servicios
+        : [{ id: "otros", name: datos.descripcion || "Servicio", value: Number(datos.valor || datos.monto || 0) }];
+      await quotesDB.create({
+        name: datos.proyectoNombre || datos.titulo,
+        clientId: datos.clienteId || "",
+        type: datos.type || services[0]?.name || "Otros Servicios",
+        value: Number(datos.valor || datos.monto || 0),
+        services,
+        status: datos.estado || QUOTE_STATUSES.BORRADOR,
+        issueDate: datos.fechaInicio || new Date().toISOString().slice(0, 10),
+        validUntil: datos.fechaVencimiento || datos.fechaEntrega || datos.fecha || "",
+        description: datos.descripcion || "",
+        applyIva: !!datos.applyIva,
+      });
+      await loadAssistantCRMContext();
+      return `Cotización CRM creada: ${datos.proyectoNombre || datos.titulo}.`;
+    }
+    return "";
+  }
+
+  function parseAssistantJsonPayload(value) {
+    if (typeof value !== "string") return null;
+    const clean = value.replace(/```json|```/g, "").trim();
+    if (!clean) return null;
+    const attempts = [clean];
+    const firstBrace = clean.indexOf("{");
+    const firstBracket = clean.indexOf("[");
+    if (firstBracket !== -1 && (firstBrace === -1 || firstBracket < firstBrace)) {
+      attempts.push(clean.slice(firstBracket, clean.lastIndexOf("]") + 1));
+    } else if (firstBrace !== -1) {
+      attempts.push(clean.slice(firstBrace, clean.lastIndexOf("}") + 1));
+    }
+    for (const attempt of attempts) {
+      if (!attempt) continue;
+      try { return JSON.parse(attempt); } catch (_) { }
+    }
+    return null;
+  }
+
+  function normalizeAssistantItem(item) {
+    if (!item || typeof item !== "object") return item;
+    const typeMap = {
+      note: "nota",
+      notes: "nota",
+      task: "tarea",
+      reminder: "recordatorio",
+      expense: "gasto",
+      client: "cliente",
+      project: "proyecto",
+      quote: "cotizacion",
+    };
+    const tipo = typeMap[String(item.tipo || "").toLowerCase()] || item.tipo;
+    const datos = item.datos && typeof item.datos === "object" ? { ...item.datos } : {};
+    if (tipo === "nota" && !Array.isArray(datos.bloques) && Array.isArray(item.bloques)) {
+      datos.bloques = item.bloques;
+    }
+    return { ...item, tipo, datos };
+  }
+
+  function normalizeAssistantResponse(respuesta) {
+    const embedded = respuesta?.tipo === "chat" ? parseAssistantJsonPayload(respuesta.respuesta) : null;
+    const raw = embedded || respuesta;
+    return (Array.isArray(raw) ? raw : [raw]).map(normalizeAssistantItem);
+  }
 
   async function handleCaptura(texto) {
+    if (isLoadingRef.current) return;
+    isLoadingRef.current = true;
     const userMsg = { role: "user", content: texto, time: now() };
     setMessages(prev => [...prev, userMsg]);
-    if (session?.user?.id) appendMessage({ role: "user", content: texto }, session.user.id).catch(() => {});
+    if (session?.user?.id) appendMessage({ role: "user", content: texto }, session.user.id).catch(() => { });
     historyRef.current = [...historyRef.current, { role: "user", content: texto }];
     setIsLoading(true);
 
     try {
       // Si la consulta parece una búsqueda web, usa Google Search grounding
-      const respuesta = looksLikeWebSearch(texto) && apiKey
+      const _activeKey = aiProvider === "openai" ? aiOpenaiKey : aiProvider === "claude" ? aiClaudeKey : apiKey;
+      const _aiCfg = { apiKey: _activeKey, provider: aiProvider, baseUrl: aiBaseUrl, model: aiModel };
+      const respuesta = looksLikeWebSearch(texto) && apiKey && aiProvider === "gemini"
         ? await searchWithGemini(historyRef.current, apiKey)
-        : await askGemini(historyRef.current, apiKey, personality, items);
-      const itemsToProcess = Array.isArray(respuesta) ? respuesta : [respuesta];
-      
+        : await askGemini(historyRef.current, apiKey, personality, items, _aiCfg, buildAssistantAppContext());
+      const itemsToProcess = normalizeAssistantResponse(respuesta);
+
       const assistantContent = itemsToProcess.map(item => item.respuesta || "").filter(Boolean).join("\n") || "Listo.";
-      const primerItem = Array.isArray(respuesta) ? respuesta[0] : respuesta;
+      const primerItem = itemsToProcess[0];
       const assistantMsg = {
         role: "assistant",
         content: assistantContent,
-        tipo: Array.isArray(respuesta) ? "chat" : respuesta.tipo,
+        tipo: itemsToProcess.length > 1 ? "chat" : primerItem?.tipo,
         time: now(),
         accion: primerItem?.accion?.tipo && primerItem.accion.tipo !== "null" ? primerItem.accion : null,
       };
       setMessages(prev => [...prev, assistantMsg]);
-      if (session?.user?.id) appendMessage({ role: "assistant", content: assistantContent }, session.user.id).catch(() => {});
+      if (session?.user?.id) appendMessage({ role: "assistant", content: assistantContent }, session.user.id).catch(() => { });
       historyRef.current = [...historyRef.current, { role: "assistant", content: assistantContent }];
 
       // Si el Asistente ordena eliminar el ítem original (reprogramación con "mover")
@@ -4773,10 +6148,11 @@ export default function CerebralApp() {
         accionResp?.accion_original === "eliminar" &&
         accionResp?.item_id_original
       ) {
-        setItems(prev => prev.filter(i => i.id !== accionResp.item_id_original));
+        handleSetItems(prev => prev.filter(i => i.id !== accionResp.item_id_original));
       }
 
       itemsToProcess.forEach(item => {
+        if (["cliente", "proyecto", "cotizacion"].includes(item.tipo)) return;
         if (item.tipo && item.tipo !== "chat") {
           const datos = item.datos || {};
           const fechaItem = datos.fecha || null;
@@ -4789,8 +6165,8 @@ export default function CerebralApp() {
             if (fecha === hoyStr) return "hoy";
             // inicio y fin de la semana actual (lunes–domingo)
             const dow = hoy.getDay(); // 0=dom, 1=lun...
-            const lunes = new Date(hoy); lunes.setDate(hoy.getDate() - ((dow + 6) % 7)); lunes.setHours(0,0,0,0);
-            const domingo = new Date(lunes); domingo.setDate(lunes.getDate() + 6); domingo.setHours(23,59,59,999);
+            const lunes = new Date(hoy); lunes.setDate(hoy.getDate() - ((dow + 6) % 7)); lunes.setHours(0, 0, 0, 0);
+            const domingo = new Date(lunes); domingo.setDate(lunes.getDate() + 6); domingo.setHours(23, 59, 59, 999);
             const fechaDate = new Date(fecha + "T12:00:00");
             if (fechaDate >= lunes && fechaDate <= domingo) return "semana";
             return "cesta"; // fecha futura más allá de esta semana → cesta
@@ -4800,11 +6176,18 @@ export default function CerebralApp() {
           const bloquesBrutos = datos.bloques;
           const bloquesNota = Array.isArray(bloquesBrutos) && bloquesBrutos.length > 0
             ? bloquesBrutos.map(b => ({
-                ...b,
-                id: uid(),
-                ...(b.items ? { items: b.items.map(it => ({ ...it, id: uid() })) } : {}),
-              }))
+              ...b,
+              id: uid(),
+              ...(b.items ? { items: b.items.map(it => ({ ...it, id: uid() })) } : {}),
+              ...(b.imagenes ? { imagenes: b.imagenes.map(img => ({ ...img, id: img.id || uid() })) } : {}),
+              ...(b.dias ? { dias: b.dias.map(d => ({ ...d, id: d.id || uid(), items: (d.items || []).map(it => ({ ...it, id: it.id || uid() })) })) } : {}),
+            }))
             : undefined;
+
+          // Ajustar saldo de cuenta bancaria si el ítem es un gasto/ingreso con cuenta asociada
+          if (item.tipo === "gasto" && datos.bankAccountId && datos.monto) {
+            adjustBankBalance(datos.bankAccountId, parseFloat(datos.monto), datos.esIngreso || false);
+          }
 
           const newItem = {
             id: uid(),
@@ -4820,61 +6203,225 @@ export default function CerebralApp() {
             fecha: fechaItem,
             hora: datos.hora || null,
           };
-          setItems(prev => [newItem, ...prev]);
+          handleSetItems(prev => [newItem, ...prev]);
         }
       });
+      const crmMessages = [];
+      for (const item of itemsToProcess) {
+        if (["cliente", "proyecto", "cotizacion"].includes(item.tipo)) {
+          const msg = await applyCRMIntent(item);
+          if (msg) crmMessages.push(msg);
+        }
+      }
+      if (crmMessages.length) {
+        setMessages(prev => [...prev, {
+          role: "assistant",
+          content: crmMessages.join("\n"),
+          tipo: "chat",
+          time: now(),
+        }]);
+      }
     } catch (err) {
       setMessages(prev => [...prev, {
-        role: "assistant", 
-        content: `⚠️ Error de conexión con Gemini: ${err.message}. Verifique que su clave de API sea correcta y esté activa.`, 
-        time: now(), 
+        role: "assistant",
+        content: `⚠️ Error de conexión con IA: ${err.message}. Verifique que su clave de API sea correcta y esté activa.`,
+        time: now(),
         tipo: "chat",
       }]);
     }
+    isLoadingRef.current = false;
     setIsLoading(false);
   }
 
+  // ── Ajustar saldo de cuenta bancaria (usado por IA y por ViewFinanzas) ────
+  function adjustBankBalance(accountId, amount, esIngreso) {
+    if (!accountId || !amount) return;
+    setBankAccounts(prev => prev.map(a => {
+      if (a.id !== accountId) return a;
+      const delta = esIngreso ? +amount : -amount;
+      return { ...a, currentBalance: (a.currentBalance || 0) + delta };
+    }));
+  }
+
   function handleDelete(id) {
-    setItems(prev => prev.filter(i => i.id !== id));
+    handleSetItems(prev => prev.filter(i => i.id !== id));
   }
 
   function handleToggle(id) {
-    setItems(prev => prev.map(i => i.id === id ? { ...i, hecho: !i.hecho } : i));
+    handleSetItems(prev => prev.map(i => i.id === id ? { ...i, hecho: !i.hecho } : i));
   }
 
   const navItems = [
-    { id: "inicio",     label: "Inicio",
-      icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M3 9.5L12 3l9 6.5V20a1 1 0 01-1 1H4a1 1 0 01-1-1V9.5z"/><path d="M9 21V12h6v9"/></svg> },
-    { id: "tareas",     label: "Tareas",
-      icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg> },
-    { id: "notas",      label: "Notas",
-      icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></svg> },
-    { id: "calendario", label: "Calendario",
-      icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg> },
-    { id: "reuniones",  label: "Reuniones",
-      icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg> },
-    { id: "finanzas",   label: "Finanzas",
-      icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/><line x1="2" y1="20" x2="22" y2="20"/></svg> },
-    { id: "contactos",  label: "Contactos",
-      icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg> },
-    { id: "correos",    label: "Correos",
-      icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg> },
+    {
+      id: "inicio", label: "Inicio",
+      icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M10.707 2.293a1 1 0 00-1.414 0l-7 7a1 1 0 001.414 1.414L4 10.414V17a2 2 0 002 2h3a1 1 0 001-1v-3h4v3a1 1 0 001 1h3a2 2 0 002-2v-6.586l.293.293a1 1 0 001.414-1.414l-7-7z" /></svg>
+    },
+    {
+      id: "clientes", label: "Clientes",
+      icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M15 11a4 4 0 10-8 0 4 4 0 008 0zm1 0a5 5 0 11-10 0 5 5 0 0110 0zM2.5 20a9.5 9.5 0 0119 0 .5.5 0 01-1 0 8.5 8.5 0 00-17 0 .5.5 0 01-1 0z" /></svg>
+    },
+    {
+      id: "proyectos", label: "Proyectos",
+      icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M3 3a2 2 0 012-2h4a2 2 0 012 2v2h2a2 2 0 012 2v2h2a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V3zm2 0v16h14V11h-2V9h-2V7h-2V5h-2V3H5z" /></svg>
+    },
+    {
+      id: "cotizaciones", label: "Cotizaciones",
+      icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path fillRule="evenodd" d="M5.625 1.5c-1.036 0-1.875.84-1.875 1.875v17.25c0 1.035.84 1.875 1.875 1.875h12.75c1.035 0 1.875-.84 1.875-1.875V12.75A3.75 3.75 0 0016.5 9h-1.875a1.875 1.875 0 01-1.875-1.875V5.25A3.75 3.75 0 009 1.5H5.625zM7.5 15a.75.75 0 01.75-.75h7.5a.75.75 0 010 1.5h-7.5A.75.75 0 017.5 15zm.75-6.75a.75.75 0 000 1.5H12a.75.75 0 000-1.5H8.25z" clipRule="evenodd" /><path d="M12.971 1.816A5.23 5.23 0 0114.25 5.25v1.875c0 .207.168.375.375.375H16.5a5.23 5.23 0 013.434 1.279 9.768 9.768 0 00-6.963-6.963z" /></svg>
+    },
+    {
+      id: "cartera", label: "Cartera",
+      icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 1.5a5.25 5.25 0 00-5.25 5.25v3a3 3 0 00-3 3v6.75a3 3 0 003 3h10.5a3 3 0 003-3v-6.75a3 3 0 00-3-3v-3c0-2.9-2.35-5.25-5.25-5.25zm3.75 8.25v-3a3.75 3.75 0 10-7.5 0v3h7.5z" /></svg>
+    },
+    {
+      id: "tareas", label: "Tareas",
+      icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path fillRule="evenodd" d="M6 2a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6H6zm7 1.5V8H18l-5-4.5zm-2.293 8.793a1 1 0 00-1.414 1.414l3 3a1 1 0 001.414 0l5-5a1 1 0 00-1.414-1.414L12 15.086l-2.293-2.293z" clipRule="evenodd" /></svg>
+    },
+    {
+      id: "notas", label: "Notas",
+      icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M19.5 21a3 3 0 003-3v-4.5a3 3 0 00-3-3h-15a3 3 0 00-3 3V18a3 3 0 003 3h15zM1.5 10.146V6a3 3 0 013-3h5.379a2.25 2.25 0 011.59.659l2.122 2.121c.14.141.293.267.456.38A4.008 4.008 0 0010.5 9h8.25a3.976 3.976 0 011.8.432c-.405-.164-.932-.257-1.8-.257H10.5a2.25 2.25 0 00-2.25 2.25v.75H4.5a3 3 0 00-3-3V10.146z" /></svg>
+    },
+    {
+      id: "calendario", label: "Calendario",
+      icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path fillRule="evenodd" d="M6.75 2.25A.75.75 0 017.5 3v1.5h9V3A.75.75 0 0118 3v1.5h.75a3 3 0 013 3v11.25a3 3 0 01-3 3H5.25a3 3 0 01-3-3V7.5a3 3 0 013-3H6V3a.75.75 0 01.75-.75zm13.5 9a1.5 1.5 0 00-1.5-1.5H5.25a1.5 1.5 0 00-1.5 1.5v7.5a1.5 1.5 0 001.5 1.5h13.5a1.5 1.5 0 001.5-1.5v-7.5z" clipRule="evenodd" /></svg>
+    },
+    {
+      id: "reuniones", label: "Reuniones",
+      icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M4.5 4.5a3 3 0 00-3 3v9a3 3 0 003 3h8.25a3 3 0 003-3v-9a3 3 0 00-3-3H4.5zM19.94 18.75l-2.69-2.69V7.94l2.69-2.69c.944-.945 2.56-.276 2.56 1.06v11.38c0 1.336-1.616 2.005-2.56 1.06z" /></svg>
+    },
+    {
+      id: "finanzas", label: "Finanzas",
+      icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M18.375 2.25c-1.035 0-1.875.84-1.875 1.875v15.75c0 1.035.84 1.875 1.875 1.875h.75c1.035 0 1.875-.84 1.875-1.875V4.125c0-1.036-.84-1.875-1.875-1.875h-.75zM9.75 8.625c0-1.036.84-1.875 1.875-1.875h.75c1.036 0 1.875.84 1.875 1.875v11.25c0 1.035-.84 1.875-1.875 1.875h-.75a1.875 1.875 0 01-1.875-1.875V8.625zM3 13.125c0-1.036.84-1.875 1.875-1.875h.75c1.036 0 1.875.84 1.875 1.875v6.75c0 1.035-.84 1.875-1.875 1.875h-.75A1.875 1.875 0 013 19.875v-6.75z" /></svg>
+    },
+    {
+      id: "correos", label: "Correos",
+      icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M1.5 8.67v8.58a3 3 0 003 3h15a3 3 0 003-3V8.67l-8.928 5.493a3 3 0 01-3.144 0L1.5 8.67z" /><path d="M22.5 6.908V6.75a3 3 0 00-3-3h-15a3 3 0 00-3 3v.158l9.714 5.978a1.5 1.5 0 001.572 0L22.5 6.908z" /></svg>
+    },
   ];
 
   // ── Render condicional: auth → syncing → app ──────────────────────────────
-  if (!authReady) return null;
-  if (!session)   return <AuthScreen onAuth={setSession} darkMode={darkMode} />;
-  if (syncing)    return <SyncingScreen darkMode={darkMode} />;
+  if (!authReady) {
+    console.log("App not ready yet - waiting for auth");
+    // Show a loading screen instead of null to avoid blank screen
+    return (
+      <div style={{
+        minHeight: "100vh",
+        background: darkMode ? "#0f172a" : "#f8fafc",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 18,
+        fontFamily: "Inter, 'Segoe UI', system-ui, -apple-system, sans-serif",
+      }}>
+        <div style={{ width: 42, height: 42, borderRadius: 10, background: "#1F3A52", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </div>
+        <div style={{ textAlign: "center" }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: darkMode ? "#f1f5f9" : "#0f172a", marginBottom: 6 }}>Inicializando aplicación...</div>
+          <div style={{ fontSize: 12, color: darkMode ? "#94a3b8" : "#475569" }}>Configurando sesión de usuario</div>
+        </div>
+        <div style={{ width: 200, height: 3, background: darkMode ? "rgba(255,255,255,0.08)" : "#e2e8f0", borderRadius: 4, overflow: "hidden" }}>
+          <style>{`@keyframes sp-pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }`}</style>
+          <div style={{ width: "60%", height: "100%", background: "#901B2F", borderRadius: 4, animation: "sp-pulse 1.4s ease-in-out infinite" }} />
+        </div>
+      </div>
+    );
+  }
+  if (!session) {
+    console.log("No session - showing auth screen");
+    return <AuthScreen onAuth={setSession} darkMode={darkMode} />;
+  }
+  if (syncing) {
+    console.log("Syncing data - showing syncing screen");
+    return <SyncingScreen darkMode={darkMode} />;
+  }
+
+  const getGlobalSearchResults = () => {
+    const q = searchText.trim().toLowerCase();
+    if (!q) return { projects: [], clients: [], quotes: [], dashboard: [] };
+
+    // 1. Proyectos
+    const matchedProjects = (assistantCRMContext.projects || []).filter(p =>
+      (p.name || "").toLowerCase().includes(q) ||
+      `sye-${p.invoiceNumber}`.toLowerCase().includes(q) ||
+      (p.type || "").toLowerCase().includes(q)
+    ).slice(0, 5);
+
+    // 2. Clientes
+    const matchedClients = (assistantCRMContext.clients || []).filter(c =>
+      (c.name || "").toLowerCase().includes(q) ||
+      (c.identification || "").toLowerCase().includes(q) ||
+      (c.contactPerson || "").toLowerCase().includes(q) ||
+      (c.contactEmail || "").toLowerCase().includes(q)
+    ).slice(0, 5);
+
+    // 3. Cotizaciones
+    const matchedQuotes = (assistantCRMContext.quotes || []).filter(quo =>
+      (quo.name || "").toLowerCase().includes(q) ||
+      (quo.status || "").toLowerCase().includes(q) ||
+      (quo.description || "").toLowerCase().includes(q)
+    ).slice(0, 5);
+
+    // 4. Dashboard (Tareas, Notas, etc.)
+    const matchedDashboard = (items || []).filter(it => {
+      const title = (it.datos?.titulo || it.texto || "").toLowerCase();
+      const notes = (it.datos?.notes || it.datos?.notas || "").toLowerCase();
+      return title.includes(q) || notes.includes(q);
+    }).slice(0, 5);
+
+    return {
+      projects: matchedProjects,
+      clients: matchedClients,
+      quotes: matchedQuotes,
+      dashboard: matchedDashboard
+    };
+  };
+
+  const searchResults = getGlobalSearchResults();
+  const hasResults = searchResults.projects.length > 0 ||
+                     searchResults.clients.length > 0 ||
+                     searchResults.quotes.length > 0 ||
+                     searchResults.dashboard.length > 0;
+
+  const handleSelectResult = (type, item) => {
+    setSearchText("");
+    setIsSearchFocused(false);
+
+    if (type === "project") {
+      setGlobalSelectedProjectId(item.id);
+      setVista("proyectos");
+    } else if (type === "client") {
+      setGlobalClientSearch(item.name || "");
+      setVista("clientes");
+    } else if (type === "quote") {
+      setVista("cotizaciones");
+    } else if (type === "dashboard") {
+      if (item.tipo === "tarea" || item.tipo === "recordatorio") {
+        setVista("tareas");
+      } else if (item.tipo === "nota") {
+        setVista("notes" ? "notas" : "notas"); // ensuring it matches exactly "notas"
+      } else if (item.tipo === "reunion") {
+        setVista("reuniones");
+      } else if (item.tipo === "gasto") {
+        setVista("finanzas");
+      } else {
+        setVista("inicio");
+      }
+    }
+  };
+
   if (syncFailed) return (
-    <div style={{ minHeight: "100vh", background: darkMode ? "#0f0f14" : "#f0f0f5", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16, fontFamily: "-apple-system, sans-serif" }}>
-      <div style={{ fontSize: 15, fontWeight: 700, color: darkMode ? "#f5f5f7" : "#1d1d1f" }}>Error al cargar datos</div>
-      <div style={{ fontSize: 13, color: darkMode ? "#aeaeb2" : "#515154" }}>No se pudo sincronizar con Supabase.</div>
+    <div style={{ minHeight: "100vh", background: darkMode ? "#0f172a" : "#f8fafc", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16, fontFamily: "Inter, system-ui, sans-serif" }}>
+      <div style={{ fontSize: 15, fontWeight: 700, color: darkMode ? "#f1f5f9" : "#0f172a" }}>Error al cargar datos</div>
+      <div style={{ fontSize: 13, color: darkMode ? "#94a3b8" : "#475569" }}>No se pudo sincronizar con Supabase.</div>
       <button onClick={() => { setSyncFailed(false); if (session?.user?.id) initUserData(session.user.id); }}
-        style={{ padding: "9px 20px", borderRadius: 10, background: "#0071e3", color: "#fff", border: "none", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+        style={{ padding: "9px 20px", borderRadius: 8, background: "#2563eb", color: "#fff", border: "none", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
         Reintentar
       </button>
       <button onClick={async () => { await supabase.auth.signOut(); }}
-        style={{ padding: "7px 16px", borderRadius: 10, background: "transparent", color: darkMode ? "#aeaeb2" : "#515154", border: `1px solid ${darkMode ? "rgba(255,255,255,0.10)" : "rgba(0,0,0,0.10)"}`, fontSize: 12, cursor: "pointer" }}>
+        style={{ padding: "7px 16px", borderRadius: 8, background: "transparent", color: darkMode ? "#94a3b8" : "#475569", border: `1px solid ${darkMode ? "rgba(255,255,255,0.10)" : "#e2e8f0"}`, fontSize: 12, cursor: "pointer" }}>
         Cerrar sesión
       </button>
     </div>
@@ -4888,13 +6435,13 @@ export default function CerebralApp() {
         {syncing && (
           <div style={{
             position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)",
-            background: darkMode ? "#1a1a24" : "#ffffff",
+            background: darkMode ? "#1e293b" : "#ffffff",
             border: `1px solid ${G.border}`,
-            borderRadius: 12, padding: "10px 18px",
+            borderRadius: 10, padding: "10px 18px",
             display: "flex", alignItems: "center", gap: 9,
-            boxShadow: "0 8px 30px rgba(0,0,0,0.18)",
+            boxShadow: "0 4px 20px rgba(0,0,0,0.12)",
             zIndex: 9999, fontSize: 13, color: G.textSecondary,
-            fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif",
+            fontFamily: "Inter, system-ui, sans-serif",
             whiteSpace: "nowrap",
           }}>
             <div style={{ width: 14, height: 14, borderRadius: "50%", border: `2px solid ${G.accent}`, borderTopColor: "transparent", animation: "spin 0.7s linear infinite", flexShrink: 0 }} />
@@ -4902,27 +6449,31 @@ export default function CerebralApp() {
           </div>
         )}
 
-        {/* MENÚ LATERAL PERMANENTE — Tema Oscuro */}
+        {/* MENÚ LATERAL PERMANENTE — Tema Adaptivo (HIG Specs) */}
         <aside className={`sidebar-permanent ${isMobileSidebarOpen ? "open" : ""}`}>
 
-          {/* App Logo / Nombre */}
-          <div style={{ padding: "20px 16px 14px", borderBottom: "1px solid rgba(255,255,255,0.07)", display: "flex", alignItems: "center", gap: 10 }}>
-            <div style={{ width: 32, height: 32, borderRadius: 9, background: "linear-gradient(135deg,#0071e3,#5e5ce6)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+          {/* App Logo / Nombre — CRM Brand */}
+          <div style={{ padding: "20px 16px 16px", borderBottom: "1px solid rgba(255,255,255,0.10)", display: "flex", alignItems: "center", gap: 11 }}>
+            {/* Brand logo: red+blue squares like CRM */}
+            <div style={{ width: 34, height: 34, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <svg width="34" height="34" viewBox="0 0 34 34" fill="none">
+                <rect x="0" y="0" width="15" height="15" rx="3" fill="#901B2F" />
+                <rect x="19" y="0" width="15" height="15" rx="3" fill="#1F3A52" opacity="0.7" />
+                <rect x="0" y="19" width="15" height="15" rx="3" fill="#1F3A52" opacity="0.7" />
+                <rect x="19" y="19" width="15" height="15" rx="3" fill="#901B2F" opacity="0.6" />
+              </svg>
             </div>
             <div>
-              <div style={{ fontSize: 13, fontWeight: 800, color: "#ffffff", letterSpacing: "-0.02em" }}>Cerebro</div>
-              <div style={{ fontSize: 9, color: "rgba(255,255,255,0.4)", fontWeight: 500, letterSpacing: "0.05em", textTransform: "uppercase" }}>Personal OS</div>
+              <div className="sidebar-brand-title">Suelos y Estructuras</div>
+              <div className="sidebar-brand-subtitle">Sistema Cerebro</div>
             </div>
             <button className="mobile-close-btn" onClick={() => setIsMobileSidebarOpen(false)}
               style={{ marginLeft: "auto", background: "transparent", border: "none", color: "rgba(255,255,255,0.4)", fontSize: 20, cursor: "pointer" }}>×</button>
           </div>
 
           {/* Navegación Principal */}
-          <div style={{ flex: 1, padding: "14px 10px", display: "flex", flexDirection: "column", gap: 2, overflowY: "auto" }}>
-            <span style={{ fontSize: 9, color: "rgba(255,255,255,0.3)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", paddingLeft: 8, marginBottom: 4 }}>
-              Principal
-            </span>
+          <div style={{ flex: 1, padding: "12px 8px", display: "flex", flexDirection: "column", gap: 1, overflowY: "auto" }}>
+            <span className="sidebar-section-header">Principal</span>
 
             {navItems.map(n => {
               const active = vista === n.id;
@@ -4930,41 +6481,27 @@ export default function CerebralApp() {
               return (
                 <button key={n.id}
                   onClick={() => { setVista(n.id); setIsMobileSidebarOpen(false); }}
-                  style={{
-                    width: "100%", padding: "9px 10px", borderRadius: 8,
-                    background: active ? "rgba(0,113,227,0.22)" : "transparent",
-                    border: active ? "1px solid rgba(0,113,227,0.30)" : "1px solid transparent",
-                    color: active ? "#ffffff" : "rgba(255,255,255,0.58)",
-                    fontSize: 12, fontWeight: active ? 700 : 400,
-                    display: "flex", alignItems: "center", gap: 9,
-                    cursor: "pointer", textAlign: "left",
-                    transition: "all 0.15s"
-                  }}
-                  onMouseEnter={e => { if (!active) { e.currentTarget.style.background = "rgba(255,255,255,0.05)"; e.currentTarget.style.color = "rgba(255,255,255,0.85)"; } }}
-                  onMouseLeave={e => { if (!active) { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "rgba(255,255,255,0.58)"; } }}
+                  className={`sidebar-nav-btn ${active ? "active" : ""}`}
                 >
-                  <span style={{ opacity: active ? 1 : 0.65, display: "flex", alignItems: "center" }}>{n.icon}</span>
+                  <span style={{ display: "flex", alignItems: "center", color: active ? "#ffffff" : "rgba(255,255,255,0.55)", flexShrink: 0 }}>{n.icon}</span>
                   <span style={{ flex: 1 }}>{n.label}</span>
                   {pendientes > 0 && (
-                    <span style={{ background: G.accent, color: "#fff", borderRadius: 10, padding: "1px 6px", fontSize: 9, fontWeight: 700 }}>{pendientes}</span>
+                    <span style={{ background: "#901B2F", color: "#fff", borderRadius: 10, padding: "1px 6px", fontSize: 9, fontWeight: 700 }}>{pendientes}</span>
                   )}
                 </button>
               );
             })}
 
-            <div style={{ height: 1, background: "rgba(255,255,255,0.07)", margin: "10px 8px" }} />
+            <div style={{ height: 1, background: "rgba(255,255,255,0.08)", margin: "8px 4px" }} />
 
-            <span style={{ fontSize: 9, color: "rgba(255,255,255,0.3)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", paddingLeft: 8, marginBottom: 4 }}>
-              Conexiones
-            </span>
+            <span className="sidebar-section-header">Conexiones</span>
 
             {/* Chat del Asistente */}
             <button onClick={() => { handleOpenDrawer({ type: "ia_chat" }); setIsMobileSidebarOpen(false); }}
-              style={{ width: "100%", padding: "9px 10px", borderRadius: 8, background: "transparent", border: "1px solid transparent", color: "rgba(255,255,255,0.58)", fontSize: 12, fontWeight: 400, display: "flex", alignItems: "center", gap: 9, cursor: "pointer", textAlign: "left", transition: "all 0.15s" }}
-              onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.05)"; e.currentTarget.style.color = "rgba(255,255,255,0.85)"; }}
-              onMouseLeave={e => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "rgba(255,255,255,0.58)"; }}>
-              <span style={{ opacity: 0.65, display: "flex", alignItems: "center" }}>
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+              className="sidebar-connection-btn"
+            >
+              <span style={{ display: "flex", alignItems: "center", flexShrink: 0 }}>
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><path fillRule="evenodd" d="M4.848 2.771A49.144 49.144 0 0112 2.25c2.43 0 4.817.178 7.152.52 1.978.292 3.348 2.024 3.348 3.97v6.02c0 1.946-1.37 3.678-3.348 3.97a48.901 48.901 0 01-3.476.383.39.39 0 00-.297.17l-2.755 4.133a.75.75 0 01-1.248 0l-2.755-4.133a.39.39 0 00-.297-.17 48.9 48.9 0 01-3.476-.384c-1.978-.29-3.348-2.024-3.348-3.97V6.741c0-1.946 1.37-3.68 3.348-3.97z" clipRule="evenodd" /></svg>
               </span>
               <span>Chat del Asistente</span>
             </button>
@@ -4972,90 +6509,76 @@ export default function CerebralApp() {
             {/* Google Workspace */}
             <button
               onClick={() => { if (googleConnected) { handleOpenDrawer({ type: "calendar_detail" }); } else { setShowConfig(true); setConfigTab("connections"); setSimulatingConnection("google"); setSimulatingStep(1); } setIsMobileSidebarOpen(false); }}
-              style={{ width: "100%", padding: "9px 10px", borderRadius: 8, background: "transparent", border: "1px solid transparent", color: googleConnected ? "rgba(52,199,89,0.9)" : "rgba(255,255,255,0.58)", fontSize: 12, fontWeight: 400, display: "flex", alignItems: "center", gap: 9, cursor: "pointer", textAlign: "left", transition: "all 0.15s" }}
-              onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.05)"; }}
-              onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}>
-              <span style={{ opacity: 0.65, display: "flex", alignItems: "center", position: "relative" }}>
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
-                  <polyline points="22,6 12,13 2,6" />
-                  {googleConnected && <path d="M9 14l2 2 4-4" stroke="#30d158" strokeWidth="2"/>}
-                </svg>
+              className="sidebar-connection-btn"
+              style={{ color: googleConnected ? "#4ade80" : "rgba(255,255,255,0.55)" }}
+            >
+              <span style={{ display: "flex", alignItems: "center", position: "relative", flexShrink: 0 }}>
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><path d="M1.5 8.67v8.58a3 3 0 003 3h15a3 3 0 003-3V8.67l-8.928 5.493a3 3 0 01-3.144 0L1.5 8.67z" /><path d="M22.5 6.908V6.75a3 3 0 00-3-3h-15a3 3 0 00-3 3v.158l9.714 5.978a1.5 1.5 0 001.572 0L22.5 6.908z" /></svg>
+                {googleConnected && <span style={{ position: "absolute", bottom: -1, right: -1, width: 7, height: 7, borderRadius: "50%", background: "#4ade80", border: "1.5px solid #1F3A52" }} />}
               </span>
               <span>Google Workspace</span>
             </button>
           </div>
 
           {/* Bottom — Perfil + Configuración */}
-          <div style={{ padding: "12px 10px 16px", borderTop: "1px solid rgba(255,255,255,0.07)", display: "flex", flexDirection: "column", gap: 8 }}>
+          <div style={{ padding: "10px 8px 14px", borderTop: "1px solid rgba(255,255,255,0.10)", display: "flex", flexDirection: "column", gap: 7 }}>
 
             {/* MemoryOrb / Asistente chip */}
-            <div onClick={() => handleOpenDrawer({ type: "ia_chat" })}
-              style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 10, padding: "8px 10px", display: "flex", alignItems: "center", gap: 8, cursor: "pointer", transition: "all 0.15s" }}
-              onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.08)"}
-              onMouseLeave={e => e.currentTarget.style.background = "rgba(255,255,255,0.05)"}>
+            <div onClick={() => handleOpenDrawer({ type: "ia_chat" })} className="sidebar-assistant-chip">
               <AsistenteAvatar size={24} state="idle" />
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 10, fontWeight: 700, color: "rgba(255,255,255,0.85)" }}>Asistente Cognitivo</div>
-                <div style={{ fontSize: 9, color: "rgba(52,199,89,0.9)", fontWeight: 600 }}>● En línea</div>
+                <div style={{ fontSize: 10, fontWeight: 700, color: "#f8fafc" }}>Asistente Cognitivo</div>
+                <div style={{ fontSize: 9, color: "#4ade80", fontWeight: 600 }}>● En línea</div>
               </div>
             </div>
 
             {/* Perfil del usuario */}
-            <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 10, padding: "8px 10px", display: "flex", alignItems: "center", gap: 8 }}>
-              <div style={{ width: 30, height: 30, borderRadius: "50%", background: "linear-gradient(135deg,#0071e3,#34c759)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 11, fontWeight: 700, flexShrink: 0 }}>JO</div>
+            <div className="sidebar-profile-chip">
+              <div style={{ width: 30, height: 30, borderRadius: "50%", background: "linear-gradient(135deg,#901B2F,#A82239)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 11, fontWeight: 700, flexShrink: 0 }}>JO</div>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "rgba(255,255,255,0.88)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>Javier Ospina</div>
-                <div style={{ fontSize: 9, color: "rgba(255,255,255,0.38)" }}>Director de Proyectos</div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "#f8fafc", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>Javier Ospina</div>
+                <div style={{ fontSize: 9, color: "rgba(255,255,255,0.45)" }}>Director de Proyectos</div>
               </div>
             </div>
 
             {/* Configuración API */}
-            <button onClick={() => { setShowConfig(true); setIsMobileSidebarOpen(false); }}
-              style={{ width: "100%", padding: "8px 10px", borderRadius: 8, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.5)", fontSize: 11, fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", gap: 7, cursor: "pointer", transition: "all 0.15s" }}
-              onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.08)"}
-              onMouseLeave={e => e.currentTarget.style.background = "rgba(255,255,255,0.04)"}
-            >
+            <button onClick={() => { setShowConfig(true); setIsMobileSidebarOpen(false); }} className="sidebar-api-btn">
               <Icon.key />
-              <span>Configuración de API</span>
+              <span>Configuración</span>
             </button>
           </div>
         </aside>
 
         {/* CONTENEDOR PRINCIPAL */}
         <main className="main-content-pane">
-          
+
           {/* ── Topbar ── */}
-          <header className="topbar-header" style={{
-            padding: "0 24px",
-            height: 56,
-            borderBottom: `1px solid ${darkMode ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.07)"}`,
-            background: darkMode ? "#16161e" : "#ffffff",
-            display: "flex", alignItems: "center", justifyContent: "space-between",
-            position: "sticky", top: 0, zIndex: 90, flexShrink: 0,
-            boxShadow: darkMode ? "none" : "0 1px 0 rgba(0,0,0,0.05)",
-            transition: "background 0.25s, border-color 0.25s"
-          }}>
+          <header className="apple-nav-banner">
             {/* Izquierda: hamburger + título */}
-            <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            <div className="topbar-left" style={{ display: "flex", alignItems: "center", gap: 14, minWidth: 0, overflow: "hidden" }}>
               <button className="mobile-hamburger-btn" onClick={() => setIsMobileSidebarOpen(true)}
-                style={{ border: "none", background: "transparent", color: G.textPrimary, fontSize: 20, cursor: "pointer", padding: 4, display: "flex", alignItems: "center" }}>
-                ☰
+                style={{ border: "none", background: "transparent", color: G.textPrimary, cursor: "pointer", padding: 6, display: "flex", alignItems: "center", borderRadius: 8 }}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                  <line x1="3" y1="6" x2="21" y2="6" /><line x1="3" y1="12" x2="21" y2="12" /><line x1="3" y1="18" x2="21" y2="18" />
+                </svg>
               </button>
-              <h1 style={{ fontSize: 16, fontWeight: 700, color: G.textPrimary, letterSpacing: "-0.02em", margin: 0 }}>
-                {vista === "inicio"     && "Dashboard"}
-                {vista === "tareas"     && "Tareas"}
-                {vista === "notas"      && "Notas"}
+              <h1 style={{ fontSize: 18, fontWeight: 700, color: G.textPrimary, letterSpacing: "-0.02em", margin: 0 }}>
+                {vista === "inicio" && "Dashboard"}
+                {vista === "tareas" && "Tareas"}
+                {vista === "notas" && "Notas"}
                 {vista === "calendario" && "Calendario"}
-                {vista === "reuniones"  && "Reuniones"}
-                {vista === "finanzas"   && "Finanzas"}
-                {vista === "contactos"  && "Contactos"}
-                {vista === "correos"    && "Correos"}
+                {vista === "reuniones" && "Reuniones"}
+                {vista === "finanzas" && "Finanzas"}
+                {vista === "correos" && "Correos"}
+                {vista === "clientes" && "Clientes"}
+                {vista === "proyectos" && "Proyectos"}
+                {vista === "cotizaciones" && "Cotizaciones"}
+                {vista === "cartera" && "Cartera y Cobranzas"}
               </h1>
               {/* Badge de estado del Asistente Personal */}
               {vista === "inicio" && (
-                <div style={{ display: "flex", alignItems: "center", gap: 6, background: G.accentSoft, border: `1px solid rgba(0,113,227,0.15)`, borderRadius: 20, padding: "4px 10px" }}>
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" stroke={G.accent} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                <div className="topbar-ai-badge" style={{ display: "flex", alignItems: "center", gap: 6, background: G.accentSoft, border: `1px solid ${G.accentGlow}`, borderRadius: 20, padding: "4px 10px" }}>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" stroke={G.accent} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
                   <span style={{ fontSize: 11, color: G.accent, fontWeight: 600 }}>
                     {items.filter(i => (i.tipo === "tarea" || i.tipo === "recordatorio") && !i.hecho).length > 0
                       ? `${items.filter(i => (i.tipo === "tarea" || i.tipo === "recordatorio") && !i.hecho).length} misiones activas`
@@ -5066,62 +6589,334 @@ export default function CerebralApp() {
             </div>
 
             {/* Derecha: búsqueda + acciones */}
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
               {/* Barra de búsqueda global */}
-              <div style={{ display: "flex", alignItems: "center", gap: 8, background: "rgba(0,0,0,0.04)", border: "1px solid rgba(0,0,0,0.07)", borderRadius: 10, padding: "6px 12px", width: 200 }}>
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="8" stroke="#86868b" strokeWidth="2"/><path d="m21 21-4.35-4.35" stroke="#86868b" strokeWidth="2" strokeLinecap="round"/></svg>
-                <input placeholder="Búsqueda global…" style={{ border: "none", background: "transparent", outline: "none", fontSize: 12, color: G.textPrimary, width: "100%", fontFamily: "Inter" }} />
+              <div className="topbar-search-box" style={{ position: "relative" }}>
+                <div style={{
+                  display: "flex", alignItems: "center", gap: 8,
+                  background: darkMode ? "rgba(255,255,255,0.06)" : "#f1f5f9",
+                  border: `1px solid ${isSearchFocused ? G.accent : (darkMode ? "rgba(255,255,255,0.08)" : "#e2e8f0")}`,
+                  boxShadow: isSearchFocused ? `0 0 0 2px ${darkMode ? "rgba(59,130,246,0.25)" : "rgba(37,99,235,0.15)"}` : "none",
+                  borderRadius: 8, padding: "6px 12px", width: 220, transition: "all 0.18s"
+                }}>
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="8" stroke={darkMode ? "rgba(255,255,255,0.35)" : "#94a3b8"} strokeWidth="2" /><path d="m21 21-4.35-4.35" stroke={darkMode ? "rgba(255,255,255,0.35)" : "#94a3b8"} strokeWidth="2" strokeLinecap="round" /></svg>
+                  <input
+                    placeholder="Búsqueda global…"
+                    value={searchText}
+                    onChange={e => setSearchText(e.target.value)}
+                    onFocus={() => setIsSearchFocused(true)}
+                    onBlur={() => setTimeout(() => setIsSearchFocused(false), 200)}
+                    style={{ border: "none", background: "transparent", outline: "none", fontSize: 12, color: G.textPrimary, width: "100%", fontFamily: "Inter, system-ui, sans-serif" }}
+                  />
+                </div>
+
+                {isSearchFocused && searchText.trim() !== "" && (
+                  <div style={{
+                    position: "absolute",
+                    top: "calc(100% + 8px)",
+                    right: 0,
+                    width: 380,
+                    maxHeight: 480,
+                    overflowY: "auto",
+                    background: darkMode ? "rgba(30, 41, 59, 0.85)" : "rgba(255, 255, 255, 0.85)",
+                    backdropFilter: "blur(20px)",
+                    WebkitBackdropFilter: "blur(20px)",
+                    border: `1px solid ${darkMode ? "rgba(255, 255, 255, 0.08)" : "rgba(0, 0, 0, 0.08)"}`,
+                    borderRadius: 12,
+                    boxShadow: darkMode ? "0 10px 25px -5px rgba(0,0,0,0.5), 0 8px 10px -6px rgba(0,0,0,0.5)" : "0 10px 25px -5px rgba(0,0,0,0.1), 0 8px 10px -6px rgba(0,0,0,0.1)",
+                    zIndex: 99999,
+                    padding: 8,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 4
+                  }}>
+                    {!hasResults ? (
+                      <div style={{ padding: "16px 12px", textAlign: "center", color: G.textSecondary, fontSize: 13 }}>
+                        <div style={{ fontSize: 20, marginBottom: 6 }}>🔍</div>
+                        No se encontraron resultados para <span style={{ fontWeight: 600, color: G.textPrimary }}>"{searchText}"</span>
+                      </div>
+                    ) : (
+                      <>
+                        {/* 1. Proyectos */}
+                        {searchResults.projects.length > 0 && (
+                          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                            <div style={{ padding: "6px 8px 4px", fontSize: 9, fontWeight: 700, letterSpacing: "0.05em", color: darkMode ? "rgba(255,255,255,0.4)" : "rgba(0,0,0,0.4)", textTransform: "uppercase" }}>📂 Proyectos ({searchResults.projects.length})</div>
+                            {searchResults.projects.map(p => {
+                              const statusColor = p.status === "completado" || p.status === "entregado" ? G.green : p.status === "ejecucion" ? G.accent : G.amber;
+                              const statusText = p.status === "completado" ? "Completado" : p.status === "entregado" ? "Entregado" : p.status === "ejecucion" ? "En Ejecución" : "Pendiente";
+                              return (
+                                <div
+                                  key={p.id}
+                                  onMouseDown={(e) => {
+                                    e.preventDefault();
+                                    handleSelectResult("project", p);
+                                  }}
+                                  className="search-result-item"
+                                  style={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "space-between",
+                                    padding: "8px 12px",
+                                    borderRadius: 8,
+                                    cursor: "pointer",
+                                    fontSize: 12,
+                                    color: G.textPrimary,
+                                    gap: 8
+                                  }}
+                                >
+                                  <div style={{ display: "flex", flexDirection: "column", minWidth: 0, flex: 1 }}>
+                                    <span style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                      {p.name || "Proyecto sin nombre"}
+                                    </span>
+                                    <span style={{ fontSize: 10, color: G.textSecondary, marginTop: 2 }}>
+                                      {p.invoiceNumber ? `SYE-${p.invoiceNumber}` : "Sin factura"} • {p.type || "General"}
+                                    </span>
+                                  </div>
+                                  <span style={{
+                                    fontSize: 9,
+                                    fontWeight: 600,
+                                    color: statusColor,
+                                    background: statusColor === G.green ? G.greenSoft : statusColor === G.accent ? G.accentSoft : G.amberSoft,
+                                    padding: "2px 6px",
+                                    borderRadius: 12,
+                                    flexShrink: 0
+                                  }}>
+                                    {statusText}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        {/* 2. Clientes */}
+                        {searchResults.clients.length > 0 && (
+                          <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 6 }}>
+                            <div style={{ padding: "6px 8px 4px", fontSize: 9, fontWeight: 700, letterSpacing: "0.05em", color: darkMode ? "rgba(255,255,255,0.4)" : "rgba(0,0,0,0.4)", textTransform: "uppercase" }}>👥 Clientes ({searchResults.clients.length})</div>
+                            {searchResults.clients.map(c => (
+                              <div
+                                key={c.id}
+                                onMouseDown={(e) => {
+                                  e.preventDefault();
+                                  handleSelectResult("client", c);
+                                }}
+                                className="search-result-item"
+                                style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "space-between",
+                                  padding: "8px 12px",
+                                  borderRadius: 8,
+                                  cursor: "pointer",
+                                  fontSize: 12,
+                                  color: G.textPrimary,
+                                  gap: 8
+                                }}
+                              >
+                                <div style={{ display: "flex", flexDirection: "column", minWidth: 0, flex: 1 }}>
+                                  <span style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                    {c.name || "Cliente sin nombre"}
+                                  </span>
+                                  <span style={{ fontSize: 10, color: G.textSecondary, marginTop: 2 }}>
+                                    {c.identification ? `NIT: ${c.identification}` : "Sin ID"} {c.contactPerson ? `• ${c.contactPerson}` : ""}
+                                  </span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* 3. Cotizaciones */}
+                        {searchResults.quotes.length > 0 && (
+                          <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 6 }}>
+                            <div style={{ padding: "6px 8px 4px", fontSize: 9, fontWeight: 700, letterSpacing: "0.05em", color: darkMode ? "rgba(255,255,255,0.4)" : "rgba(0,0,0,0.4)", textTransform: "uppercase" }}>📄 Cotizaciones ({searchResults.quotes.length})</div>
+                            {searchResults.quotes.map(quo => {
+                              const isPaid = quo.status === "pagada" || quo.status === "facturada";
+                              const statusColor = isPaid ? G.green : quo.status === "pendiente" ? G.amber : G.textTertiary;
+                              return (
+                                <div
+                                  key={quo.id}
+                                  onMouseDown={(e) => {
+                                    e.preventDefault();
+                                    handleSelectResult("quote", quo);
+                                  }}
+                                  className="search-result-item"
+                                  style={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "space-between",
+                                    padding: "8px 12px",
+                                    borderRadius: 8,
+                                    cursor: "pointer",
+                                    fontSize: 12,
+                                    color: G.textPrimary,
+                                    gap: 8
+                                  }}
+                                >
+                                  <div style={{ display: "flex", flexDirection: "column", minWidth: 0, flex: 1 }}>
+                                    <span style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                      {quo.name || "Cotización sin título"}
+                                    </span>
+                                    <span style={{ fontSize: 10, color: G.textSecondary, marginTop: 2 }}>
+                                      {quo.description || "Sin descripción"}
+                                    </span>
+                                  </div>
+                                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", flexShrink: 0 }}>
+                                    {quo.valor && (
+                                      <span style={{ fontWeight: 600, fontSize: 11 }}>
+                                        ${Number(quo.valor).toLocaleString()}
+                                      </span>
+                                    )}
+                                    <span style={{ fontSize: 9, color: statusColor, fontWeight: 500 }}>
+                                      {quo.status || "Pendiente"}
+                                    </span>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        {/* 4. Dashboard */}
+                        {searchResults.dashboard.length > 0 && (
+                          <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 6 }}>
+                            <div style={{ padding: "6px 8px 4px", fontSize: 9, fontWeight: 700, letterSpacing: "0.05em", color: darkMode ? "rgba(255,255,255,0.4)" : "rgba(0,0,0,0.4)", textTransform: "uppercase" }}>📋 Misiones y Dashboard ({searchResults.dashboard.length})</div>
+                            {searchResults.dashboard.map(it => {
+                              let typeLabel = "Tarea";
+                              let icon = "✓";
+                              let typeColor = G.accent;
+                              let typeBg = G.accentSoft;
+                              
+                              if (it.tipo === "nota") {
+                                typeLabel = "Nota";
+                                icon = "📝";
+                                typeColor = G.purple || "#a78bfa";
+                                typeBg = darkMode ? "rgba(167, 139, 250, 0.15)" : "rgba(124, 58, 237, 0.08)";
+                              } else if (it.tipo === "reunion") {
+                                typeLabel = "Reunión";
+                                icon = "🤝";
+                                typeColor = G.teal;
+                                typeBg = G.tealSoft;
+                              } else if (it.tipo === "gasto") {
+                                typeLabel = "Gasto";
+                                icon = "💵";
+                                typeColor = G.coral;
+                                typeBg = G.coralSoft;
+                              } else if (it.tipo === "recordatorio") {
+                                typeLabel = "Alerta";
+                                icon = "🔔";
+                                typeColor = G.amber;
+                                typeBg = G.amberSoft;
+                              }
+
+                              const title = it.datos?.titulo || it.texto || "Sin título";
+                              return (
+                                <div
+                                  key={it.id}
+                                  onMouseDown={(e) => {
+                                    e.preventDefault();
+                                    handleSelectResult("dashboard", it);
+                                  }}
+                                  className="search-result-item"
+                                  style={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "space-between",
+                                    padding: "8px 12px",
+                                    borderRadius: 8,
+                                    cursor: "pointer",
+                                    fontSize: 12,
+                                    color: G.textPrimary,
+                                    gap: 8
+                                  }}
+                                >
+                                  <div style={{ display: "flex", flexDirection: "column", minWidth: 0, flex: 1 }}>
+                                    <span style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                      {title}
+                                    </span>
+                                    <span style={{ fontSize: 10, color: G.textSecondary, marginTop: 2 }}>
+                                      {it.datos?.notas || it.datos?.notes || it.datos?.descripcion || "Detalle"}
+                                    </span>
+                                  </div>
+                                  <span style={{
+                                    fontSize: 9,
+                                    fontWeight: 600,
+                                    color: typeColor,
+                                    background: typeBg,
+                                    padding: "2px 6px",
+                                    borderRadius: 12,
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: 4,
+                                    flexShrink: 0
+                                  }}>
+                                    <span>{icon}</span>
+                                    <span>{typeLabel}</span>
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Toggle Dark/Light Mode */}
               <button
                 onClick={() => { const next = !darkMode; setDarkMode(next); localStorage.setItem("cerebro_dark", next); handleUpsertSettings({ dark_mode: next }); }}
                 title={darkMode ? "Cambiar a modo claro" : "Cambiar a modo oscuro"}
-                style={{ width: 34, height: 34, borderRadius: 9,
+                style={{
+                  width: 34, height: 34, borderRadius: 9,
                   background: darkMode ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.04)",
                   border: `1px solid ${darkMode ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.07)"}`,
-                  display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", transition: "all 0.2s" }}
+                  display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", transition: "all 0.2s"
+                }}
                 onMouseEnter={e => e.currentTarget.style.background = darkMode ? "rgba(255,255,255,0.14)" : "rgba(0,0,0,0.08)"}
                 onMouseLeave={e => e.currentTarget.style.background = darkMode ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.04)"}>
                 {darkMode
-                  ? <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="5" stroke="#f5f5f7" strokeWidth="2"/><path d="M12 2v2M12 20v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M2 12h2M20 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" stroke="#f5f5f7" strokeWidth="2" strokeLinecap="round"/></svg>
-                  : <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" stroke={G.textSecondary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                  ? <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="5" stroke="#f5f5f7" strokeWidth="2" /><path d="M12 2v2M12 20v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M2 12h2M20 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" stroke="#f5f5f7" strokeWidth="2" strokeLinecap="round" /></svg>
+                  : <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" stroke={G.textSecondary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
                 }
               </button>
 
-              {/* Campana de notificaciones */}
-              <button style={{ width: 34, height: 34, borderRadius: 9,
-                background: darkMode ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)",
-                border: `1px solid ${darkMode ? "rgba(255,255,255,0.09)" : "rgba(0,0,0,0.07)"}`,
-                display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" stroke={G.textSecondary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/><path d="M13.73 21a2 2 0 0 1-3.46 0" stroke={G.textSecondary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
-              </button>
 
-              {/* Botón configurar API */}
-              <button onClick={() => setShowConfig(!showConfig)}
-                style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 600,
-                  color: apiKey ? G.green : G.amber,
-                  background: apiKey ? G.greenSoft : G.amberSoft,
-                  border: `1px solid ${apiKey ? "rgba(52,199,89,0.2)" : "rgba(255,149,0,0.2)"}`,
-                  padding: "6px 12px", borderRadius: 9, cursor: "pointer", transition: "all 0.2s" }}>
-                <Icon.key />
-                <span>{apiKey ? "API activa" : "Configurar"}</span>
-              </button>
-
-              {/* Contador de capturas */}
-              <div style={{ fontSize: 11, color: G.textSecondary,
-                background: darkMode ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)",
-                border: `1px solid ${darkMode ? "rgba(255,255,255,0.09)" : "rgba(0,0,0,0.07)"}`,
-                padding: "6px 10px", borderRadius: 9, fontWeight: 600 }}>
-                {items.length} cap.
-              </div>
+              {/* Botón configurar API — icono compacto con punto de estado */}
+              {(() => {
+                const hasKey = aiProvider === "openai" ? !!aiOpenaiKey : aiProvider === "claude" ? !!aiClaudeKey : !!apiKey;
+                return (
+                  <button onClick={() => setShowConfig(!showConfig)}
+                    title={hasKey ? "IA configurada" : "Configurar IA"}
+                    style={{
+                      position: "relative", display: "flex", alignItems: "center", justifyContent: "center",
+                      width: 34, height: 34,
+                      background: darkMode ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.04)",
+                      border: `1px solid ${darkMode ? "rgba(255,255,255,0.11)" : "rgba(0,0,0,0.07)"}`,
+                      borderRadius: 9, cursor: "pointer", transition: "all 0.18s"
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.background = darkMode ? "rgba(255,255,255,0.13)" : "rgba(0,0,0,0.08)"}
+                    onMouseLeave={e => e.currentTarget.style.background = darkMode ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.04)"}>
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={darkMode ? "rgba(255,255,255,0.65)" : G.textSecondary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 11-7.778 7.778 5.5 5.5 0 017.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4" />
+                    </svg>
+                    {/* Punto de estado */}
+                    <span style={{
+                      position: "absolute", top: 5, right: 5, width: 7, height: 7, borderRadius: "50%",
+                      background: hasKey ? "#34c759" : "#ff9500",
+                      border: `1.5px solid ${darkMode ? "#16161e" : "#f5f5f7"}`
+                    }} />
+                  </button>
+                );
+              })()}
             </div>
           </header>
 
           {/* Área del Contenido de la Vista Activa */}
           <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
             {vista === "inicio" && (
-              <ViewDashboard items={items} onNavigate={setVista} onOpenDrawer={handleOpenDrawer} darkMode={darkMode} apiKey={apiKey} googleConnectedEmail={googleConnectedEmail} />
+              <ViewDashboard items={items} onNavigate={setVista} onOpenDrawer={handleOpenDrawer} darkMode={darkMode} apiKey={apiKey} aiConfig={{ apiKey: aiProvider === "openai" ? aiOpenaiKey : aiProvider === "claude" ? aiClaudeKey : apiKey, provider: aiProvider, baseUrl: aiBaseUrl, model: aiModel }} googleConnectedEmail={googleConnectedEmail} gmailEmails={gmailEmails} fetchingEmails={fetchingEmails} onRefreshEmails={handleRefreshEmails} />
             )}
             {vista === "tareas" && (
               <div style={{ flex: 1, overflow: "hidden", display: "flex" }}>
@@ -5146,22 +6941,56 @@ export default function CerebralApp() {
             )}
             {vista === "reuniones" && (
               <div style={{ flex: 1, overflow: "hidden", display: "flex" }}>
-                <ViewReuniones items={items} setItems={handleSetItems} apiKey={apiKey} darkMode={darkMode} />
+                <ViewReuniones
+                  items={items}
+                  setItems={handleSetItems}
+                  apiKey={apiKey}
+                  aiConfig={{ apiKey: aiProvider === "openai" ? aiOpenaiKey : aiProvider === "claude" ? aiClaudeKey : apiKey, provider: aiProvider, baseUrl: aiBaseUrl, model: aiModel }}
+                  darkMode={darkMode}
+                />
               </div>
             )}
             {vista === "finanzas" && (
-              <div style={{ flex: 1, overflowY: "auto", padding: "24px 24px 40px", background: darkMode ? DARK.bg : LIGHT.bg }}>
+              <div style={{ flex: 1, overflowY: "auto", padding: `clamp(16px,2.5vw,32px) clamp(16px,2.5vw,32px) 48px`, background: darkMode ? DARK.bg : LIGHT.bg }}>
                 <FinanceLedger
                   items={items}
                   setItems={handleSetItems}
                   onDelete={handleDelete}
                   darkMode={darkMode}
+                  apiKey={apiKey}
+                  aiConfig={{ apiKey: aiProvider === "openai" ? aiOpenaiKey : aiProvider === "claude" ? aiClaudeKey : apiKey, provider: aiProvider, baseUrl: aiBaseUrl, model: aiModel }}
+                  userEmail={session?.user?.email || googleConnectedEmail || ""}
+                  bankAccounts={bankAccounts}
+                  setBankAccounts={setBankAccounts}
                 />
               </div>
             )}
-            {vista === "contactos" && (
-              <div style={{ flex: 1, overflowY: "auto", padding: "24px 24px 40px", background: darkMode ? DARK.bg : LIGHT.bg }}>
-                <ViewContactos contactos={contactos} setContactos={handleSetContactos} darkMode={darkMode} />
+            {vista === "clientes" && (
+              <div style={{ flex: 1, overflowY: "auto", padding: `clamp(16px,2.5vw,32px) clamp(16px,2.5vw,32px) 48px`, background: darkMode ? DARK.bg : LIGHT.bg, display: "flex", flexDirection: "column" }}>
+                <ViewClientes
+                  darkMode={darkMode}
+                  initialSearch={globalClientSearch}
+                  onClearInitialSearch={() => setGlobalClientSearch("")}
+                />
+              </div>
+            )}
+            {vista === "proyectos" && (
+              <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column", padding: `clamp(16px,2.5vw,28px) clamp(16px,2.5vw,28px) 0`, background: darkMode ? DARK.bg : LIGHT.bg }}>
+                <ViewProyectos
+                  darkMode={darkMode}
+                  initialProjectId={globalSelectedProjectId}
+                  onClearInitialProject={() => setGlobalSelectedProjectId(null)}
+                />
+              </div>
+            )}
+            {vista === "cotizaciones" && (
+              <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column", padding: `clamp(16px,2.5vw,28px) clamp(16px,2.5vw,28px) 0`, background: darkMode ? DARK.bg : LIGHT.bg }}>
+                <ViewCotizaciones darkMode={darkMode} />
+              </div>
+            )}
+            {vista === "cartera" && (
+              <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column", padding: `clamp(16px,2.5vw,28px) clamp(16px,2.5vw,28px) 0`, background: darkMode ? DARK.bg : LIGHT.bg }}>
+                <ViewCartera darkMode={darkMode} />
               </div>
             )}
             {vista === "correos" && (
@@ -5169,7 +6998,24 @@ export default function CerebralApp() {
                 <ViewCorreos
                   googleConnectedEmail={googleConnectedEmail}
                   apiKey={apiKey}
+                  aiConfig={{ apiKey: aiProvider === "openai" ? aiOpenaiKey : aiProvider === "claude" ? aiClaudeKey : apiKey, provider: aiProvider, baseUrl: aiBaseUrl, model: aiModel }}
                   darkMode={darkMode}
+                  gmailEmails={gmailEmails}
+                  fetchingEmails={fetchingEmails}
+                  gmailSyncError={gmailSyncError}
+                  gmailToken={gmailToken}
+                  gmailTokenActive={!!gmailToken || !!session?.user?.id}
+                  onRefreshEmails={handleRefreshEmails}
+                  onMarkRead={handleMarkGmailRead}
+                  onReconnectGmail={async () => {
+                    const { email } = await startPersistentGmailConnect();
+                    setGoogleConnected(true);
+                    setGoogleConnectedEmail(email || "");
+                    localStorage.setItem("cerebro_google_connected", "true");
+                    if (email) localStorage.setItem("cerebro_google_email", email);
+                    await doFetchEmails();
+                  }}
+                  onOpenConnections={() => { setShowConfig(true); setConfigTab("connections"); }}
                 />
               </div>
             )}
@@ -5407,7 +7253,7 @@ export default function CerebralApp() {
                           <h4 style={{ fontSize: 13, fontWeight: 800, color: G.textPrimary, letterSpacing: "-0.02em" }}>
                             Selecciona los servicios a los que puede acceder
                           </h4>
-                          
+
                           <div style={{ display: "flex", flexDirection: "column", gap: 8, background: "rgba(0,0,0,0.02)", padding: 10, borderRadius: 12 }}>
                             <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer" }}>
                               <input type="checkbox" checked={googleScopes.calendar} disabled style={{ accentColor: G.accent, marginTop: 2 }} />
@@ -5642,75 +7488,316 @@ export default function CerebralApp() {
               </div>
 
               {/* Contenido Pestaña API */}
-              {configTab === "api" && (
-                <div style={{ display: "flex", flexDirection: "column", gap: 12, animation: "fadeIn 0.2s ease" }}>
-                  <input
-                    type="password"
-                    value={tempKey}
-                    onChange={e => setTempKey(e.target.value)}
-                    placeholder="AIzaSy..."
-                    style={{
-                      width: "100%", background: "rgba(255, 255, 255, 0.6)",
-                      border: `1px solid ${G.border}`,
-                      borderRadius: 10, padding: "10px 12px",
-                      color: G.textPrimary, fontSize: 13, outline: "none",
-                      fontFamily: "Inter",
-                    }}
-                  />
+              {configTab === "api" && (() => {
+                const inputStyle = { width: "100%", background: darkMode ? "rgba(255,255,255,0.07)" : "rgba(255,255,255,0.8)", border: `1px solid ${G.border}`, borderRadius: 10, padding: "9px 12px", color: G.textPrimary, fontSize: 12, outline: "none", fontFamily: "Inter", boxSizing: "border-box" };
+                const PRESETS = [
+                  { label: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1", model: "deepseek/deepseek-r1:free" },
+                  { label: "OpenAI", baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini" },
+                  { label: "Qwen", baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen-max" },
+                  { label: "Kimi", baseUrl: "https://api.moonshot.cn/v1", model: "moonshot-v1-8k" },
+                  { label: "Groq", baseUrl: "https://api.groq.com/openai/v1", model: "llama-3.3-70b-versatile" },
+                ];
+                return (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10, animation: "fadeIn 0.2s ease" }}>
+                    {/* Provider selector */}
+                    <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                      {[{ id: "gemini", label: "🌟 Google Gemini" }, { id: "openai", label: "⚡ OpenAI-compat." }, { id: "claude", label: "🤖 Claude AI" }].map(p => (
+                        <button key={p.id} onClick={() => {
+                          const k = p.id === "openai" ? aiOpenaiKey : p.id === "claude" ? aiClaudeKey : apiKey;
+                          const mk = p.id === "openai" ? "ai_openai_model" : p.id === "claude" ? "ai_claude_model" : "ai_gemini_model";
+                          setTempProvider(p.id); setTempKey(k); setTempModel(localStorage.getItem(mk) || ""); setOrModels([]);
+                        }}
+                          style={{
+                            flex: 1, minWidth: 100, padding: "8px", borderRadius: 9, fontSize: 11, fontWeight: 700, cursor: "pointer",
+                            border: `1px solid ${tempProvider === p.id ? G.accent : G.border}`,
+                            background: tempProvider === p.id ? G.accent : "transparent",
+                            color: tempProvider === p.id ? "#fff" : G.textTertiary, transition: "all 0.15s"
+                          }}>
+                          {p.label}
+                        </button>
+                      ))}
+                    </div>
 
-                  <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
-                    <button
-                      onClick={() => {
-                        localStorage.setItem("gemini_api_key", tempKey.trim());
-                        setApiKey(tempKey.trim());
-                        if (tempKey.trim()) handleUpsertSettings({ gemini_api_key: tempKey.trim() });
+                    {/* API Key */}
+                    <div>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: G.textTertiary, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>API Key</div>
+                      <input type="password" value={tempKey} onChange={e => setTempKey(e.target.value)}
+                        placeholder={tempProvider === "gemini" ? "AIzaSy..." : tempProvider === "claude" ? "sk-ant-api03-..." : "sk-..."} style={inputStyle} />
+                    </div>
+
+                    {/* Claude model selector */}
+                    {tempProvider === "claude" && (
+                      <div>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 5 }}>
+                          <div style={{ fontSize: 10, fontWeight: 700, color: G.textTertiary, textTransform: "uppercase", letterSpacing: "0.06em" }}>Modelo Claude</div>
+                          <button onClick={handleLoadClaudeModels} disabled={loadingModels || !tempKey.trim()}
+                            style={{
+                              padding: "3px 10px", borderRadius: 12, fontSize: 10, fontWeight: 700,
+                              cursor: loadingModels || !tempKey.trim() ? "not-allowed" : "pointer",
+                              border: `1px solid ${G.accent}`, background: G.accentSoft, color: G.accent,
+                              opacity: !tempKey.trim() ? 0.4 : 1, transition: "all 0.12s"
+                            }}>
+                            {loadingModels ? "⏳ Cargando…" : "🔄 Cargar modelos"}
+                          </button>
+                        </div>
+                        {(() => {
+                          const FALLBACK = [
+                            { id: "claude-opus-4-7", label: "Opus 4.7", desc: "Máxima inteligencia" },
+                            { id: "claude-sonnet-4-6", label: "Sonnet 4.6", desc: "Equilibrado ⭐" },
+                            { id: "claude-haiku-4-5", label: "Haiku 4.5", desc: "Ultra rápido" },
+                            { id: "claude-opus-4-6", label: "Opus 4.6 Heredado", desc: "Legacy" },
+                          ];
+                          const lista = claudeModels.length > 0 ? claudeModels : FALLBACK;
+                          return (
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 5, marginBottom: 6, maxHeight: 180, overflowY: "auto" }}>
+                              {lista.map(m => (
+                                <button key={m.id || m.model} onClick={() => setTempModel(m.id || m.model)}
+                                  style={{
+                                    padding: "7px 9px", borderRadius: 9, fontSize: 10, fontWeight: 600, cursor: "pointer", textAlign: "left",
+                                    border: `1px solid ${tempModel === (m.id || m.model) ? G.accent : G.border}`,
+                                    background: tempModel === (m.id || m.model) ? G.accentSoft : (darkMode ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.02)"),
+                                    color: tempModel === (m.id || m.model) ? G.accent : G.textSecondary, transition: "all 0.12s"
+                                  }}>
+                                  <div style={{ fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.label}</div>
+                                  {m.desc && <div style={{ opacity: 0.65, fontSize: 9, marginTop: 2 }}>{m.desc}</div>}
+                                </button>
+                              ))}
+                            </div>
+                          );
+                        })()}
+                        <div>
+                          <div style={{ fontSize: 10, fontWeight: 700, color: G.textTertiary, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>Modelo (editable)</div>
+                          <input type="text" value={tempModel} onChange={e => setTempModel(e.target.value)} placeholder="claude-sonnet-4-6" style={inputStyle} />
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Gemini fallback key — siempre visible en modo OpenAI */}
+                    {tempProvider === "openai" && (
+                      <div style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "8px 10px", borderRadius: 10, background: "rgba(52,199,89,0.07)", border: "1px solid rgba(52,199,89,0.2)" }}>
+                        <span style={{ fontSize: 16, lineHeight: "1", marginTop: 2 }}>🔒</span>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontSize: 10, fontWeight: 700, color: "#34c759", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                            Gemini API Key — respaldo siempre guardado
+                          </div>
+                          <input type="password" value={tempGeminiKey} onChange={e => setTempGeminiKey(e.target.value)}
+                            placeholder="AIzaSy..." style={{ ...inputStyle, border: `1px solid ${tempGeminiKey ? "rgba(52,199,89,0.4)" : "rgba(52,199,89,0.2)"}` }} />
+                          <div style={{ fontSize: 9, color: "#34c759", marginTop: 3, opacity: 0.8 }}>
+                            Se guarda por separado. Nunca se sobreescribe al cambiar de proveedor.
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* OpenAI-compatible extra fields */}
+                    {tempProvider === "openai" && (() => {
+                      return (<>
+                        <div>
+                          <div style={{ fontSize: 10, fontWeight: 700, color: G.textTertiary, marginBottom: 5, textTransform: "uppercase", letterSpacing: "0.06em" }}>Proveedor rápido</div>
+                          <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                            {PRESETS.map(p => (
+                              <button key={p.label} onClick={() => { setTempBaseUrl(p.baseUrl); setTempModel(p.model); setOrModels([]); }}
+                                style={{
+                                  padding: "4px 10px", borderRadius: 20, fontSize: 10, fontWeight: 600, cursor: "pointer",
+                                  border: `1px solid ${tempBaseUrl === p.baseUrl ? G.accent : G.border}`,
+                                  background: tempBaseUrl === p.baseUrl ? G.accentSoft : "transparent",
+                                  color: tempBaseUrl === p.baseUrl ? G.accent : G.textTertiary
+                                }}>
+                                {p.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        <div>
+                          <div style={{ fontSize: 10, fontWeight: 700, color: G.textTertiary, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>Base URL</div>
+                          <input type="text" value={tempBaseUrl} onChange={e => { setTempBaseUrl(e.target.value); setOrModels([]); }}
+                            placeholder="https://openrouter.ai/api/v1" style={inputStyle} />
+                        </div>
+                        {/* Modelos gratuitos (solo cuando base URL es OpenRouter) */}
+                        {tempBaseUrl.includes("openrouter") && (
+                          <div>
+                            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                              <div style={{ fontSize: 10, fontWeight: 700, color: G.textTertiary, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                                Modelos gratuitos 🆓
+                              </div>
+                              <button onClick={handleLoadModels} disabled={loadingModels || !tempKey.trim()}
+                                style={{
+                                  padding: "3px 10px", borderRadius: 12, fontSize: 10, fontWeight: 700,
+                                  cursor: loadingModels || !tempKey.trim() ? "not-allowed" : "pointer",
+                                  border: `1px solid ${G.accent}`, background: G.accentSoft, color: G.accent,
+                                  opacity: !tempKey.trim() ? 0.4 : 1, transition: "all 0.12s"
+                                }}>
+                                {loadingModels ? "⏳ Cargando…" : "🔄 Cargar modelos"}
+                              </button>
+                            </div>
+                            {orModels.length > 0 ? (
+                              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 5, maxHeight: 180, overflowY: "auto" }}>
+                                {orModels.map(m => (
+                                  <button key={m.model} onClick={() => setTempModel(m.model)}
+                                    style={{
+                                      padding: "6px 8px", borderRadius: 8, fontSize: 10, fontWeight: 600, cursor: "pointer", textAlign: "left",
+                                      border: `1px solid ${tempModel === m.model ? G.accent : G.border}`,
+                                      background: tempModel === m.model ? G.accentSoft : (darkMode ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.02)"),
+                                      color: tempModel === m.model ? G.accent : G.textSecondary, transition: "all 0.12s",
+                                      overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis"
+                                    }}>
+                                    {m.label}
+                                  </button>
+                                ))}
+                              </div>
+                            ) : !loadingModels && (
+                              <div style={{ fontSize: 10, color: G.textTertiary, padding: "6px 0", fontStyle: "italic" }}>
+                                Ingresa tu API key y pulsa "🔄 Cargar modelos" para ver los disponibles
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        <div>
+                          <div style={{ fontSize: 10, fontWeight: 700, color: G.textTertiary, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>Modelo (editable)</div>
+                          <input type="text" value={tempModel} onChange={e => setTempModel(e.target.value)}
+                            placeholder="ej. deepseek/deepseek-r1:free" style={inputStyle} />
+                        </div>
+                      </>);
+                    })()}
+
+                    {/* Gemini model override */}
+                    {tempProvider === "gemini" && (
+                      <div>
+                        <div style={{ fontSize: 10, fontWeight: 700, color: G.textTertiary, marginBottom: 5, textTransform: "uppercase", letterSpacing: "0.06em" }}>Modelo Gemini</div>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 5, marginBottom: 6 }}>
+                          {[
+                            { id: "gemini-2.5-flash", label: "2.5 Flash", desc: "Rápido + inteligente ⭐" },
+                            { id: "gemini-2.5-pro", label: "2.5 Pro", desc: "Máxima capacidad" },
+                            { id: "gemini-2.0-flash", label: "2.0 Flash", desc: "Eficiente multimodal" },
+                            { id: "gemini-2.0-flash-thinking-exp", label: "2.0 Flash Think", desc: "Razonamiento extendido" },
+                            { id: "gemini-1.5-pro", label: "1.5 Pro", desc: "Contexto 2M tokens" },
+                            { id: "gemini-1.5-flash", label: "1.5 Flash", desc: "Ultra económico" },
+                          ].map(m => (
+                            <button key={m.id} onClick={() => setTempModel(m.id)}
+                              style={{
+                                padding: "7px 9px", borderRadius: 9, fontSize: 10, fontWeight: 600, cursor: "pointer", textAlign: "left",
+                                border: `1px solid ${tempModel === m.id ? G.accent : G.border}`,
+                                background: tempModel === m.id ? G.accentSoft : (darkMode ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.02)"),
+                                color: tempModel === m.id ? G.accent : G.textSecondary, transition: "all 0.12s"
+                              }}>
+                              <div style={{ fontWeight: 700 }}>{m.label}</div>
+                              <div style={{ opacity: 0.65, fontSize: 9, marginTop: 2 }}>{m.desc}</div>
+                            </button>
+                          ))}
+                        </div>
+                        <div style={{ fontSize: 10, fontWeight: 700, color: G.textTertiary, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>Modelo (editable)</div>
+                        <input type="text" value={tempModel} onChange={e => setTempModel(e.target.value)}
+                          placeholder="gemini-2.5-flash" style={inputStyle} />
+                      </div>
+                    )}
+
+                    {/* Test result */}
+                    {testStatus !== "idle" && (
+                      <div style={{
+                        padding: "8px 12px", borderRadius: 9, fontSize: 11, fontWeight: 600,
+                        background: testStatus === "ok" ? "rgba(52,199,89,0.1)" : testStatus === "loading" ? G.accentSoft : "rgba(255,59,48,0.08)",
+                        color: testStatus === "ok" ? "#34c759" : testStatus === "loading" ? G.accent : "#ff3b30",
+                        border: `1px solid ${testStatus === "ok" ? "rgba(52,199,89,0.25)" : testStatus === "loading" ? `${G.accent}33` : "rgba(255,59,48,0.2)"}`
+                      }}>
+                        {testStatus === "loading" ? "⏳ Probando conexión…" : testMsg}
+                      </div>
+                    )}
+
+                    {/* Botones */}
+                    <div style={{ display: "flex", gap: 8, marginTop: 2 }}>
+                      <button onClick={handleTestAI} disabled={testStatus === "loading"}
+                        style={{
+                          padding: "10px 14px", borderRadius: 10, background: "transparent", color: G.accent,
+                          border: `1px solid ${G.accent}55`, fontSize: 12, fontWeight: 600, cursor: "pointer", flexShrink: 0
+                        }}>
+                        {testStatus === "loading" ? "…" : "⚡ Probar"}
+                      </button>
+                      <button onClick={() => {
+                        let finalGeminiKey = apiKey;
+                        let finalClaudeKey = aiClaudeKey;
+                        let finalOpenaiKey = aiOpenaiKey;
+
+                        if (tempProvider === "gemini") {
+                          localStorage.setItem("gemini_api_key", tempKey.trim());
+                          setApiKey(tempKey.trim());
+                          finalGeminiKey = tempKey.trim();
+                        } else if (tempProvider === "claude") {
+                          localStorage.setItem("ai_claude_key", tempKey.trim());
+                          setAiClaudeKey(tempKey.trim());
+                          finalClaudeKey = tempKey.trim();
+                        } else {
+                          localStorage.setItem("ai_openai_key", tempKey.trim());
+                          setAiOpenaiKey(tempKey.trim());
+                          finalOpenaiKey = tempKey.trim();
+                          if (tempGeminiKey.trim()) {
+                            localStorage.setItem("gemini_api_key", tempGeminiKey.trim());
+                            setApiKey(tempGeminiKey.trim());
+                            finalGeminiKey = tempGeminiKey.trim();
+                          }
+                        }
+                        localStorage.setItem("ai_provider", tempProvider);
+                        localStorage.setItem("ai_base_url", tempBaseUrl);
+                        const mk2 = tempProvider === "openai" ? "ai_openai_model" : tempProvider === "claude" ? "ai_claude_model" : "ai_gemini_model";
+                        localStorage.setItem(mk2, tempModel);
+                        setAiProvider(tempProvider); setAiBaseUrl(tempBaseUrl); setAiModel(tempModel);
+
+                        // Save in Supabase
+                        handleUpsertSettings({
+                          gemini_api_key: finalGeminiKey,
+                          ai_openai_key: finalOpenaiKey,
+                          ai_claude_key: finalClaudeKey,
+                          ai_provider: tempProvider,
+                          ai_base_url: tempBaseUrl,
+                          ai_gemini_model: tempProvider === "gemini" ? tempModel : (localStorage.getItem("ai_gemini_model") || ""),
+                          ai_openai_model: tempProvider === "openai" ? tempModel : (localStorage.getItem("ai_openai_model") || ""),
+                          ai_claude_model: tempProvider === "claude" ? tempModel : (localStorage.getItem("ai_claude_model") || "")
+                        });
+
                         setShowConfig(false);
                       }}
-                      style={{
-                        flex: 1, padding: "10px", borderRadius: 10,
-                        background: G.accent, color: "#ffffff",
-                        border: "none",
-                        fontSize: 12, fontWeight: 600, textAlign: "center",
-                        boxShadow: `0 2px 8px rgba(0, 113, 227, 0.2)`,
-                        transition: "all 0.2s",
-                        cursor: "pointer"
-                      }}
-                      onMouseEnter={e => e.currentTarget.style.transform = "translateY(-1px)"}
-                      onMouseLeave={e => e.currentTarget.style.transform = "none"}
-                    >
-                      Guardar
-                    </button>
-                    {apiKey && (
-                      <button
-                        onClick={() => {
-                          localStorage.removeItem("gemini_api_key");
-                          setApiKey("");
-                          setTempKey("");
+                        style={{ flex: 1, padding: "10px", borderRadius: 10, background: G.accent, color: "#fff", border: "none", fontSize: 12, fontWeight: 600, cursor: "pointer", boxShadow: `0 2px 8px rgba(0,113,227,0.2)` }}>
+                        Guardar
+                      </button>
+                      {(tempProvider === "openai" ? !!aiOpenaiKey : tempProvider === "claude" ? !!aiClaudeKey : !!apiKey) && (
+                        <button onClick={() => {
+                          let finalGeminiKey = apiKey;
+                          let finalClaudeKey = aiClaudeKey;
+                          let finalOpenaiKey = aiOpenaiKey;
+
+                          if (tempProvider === "openai") {
+                            localStorage.removeItem("ai_openai_key");
+                            setAiOpenaiKey("");
+                            setTempKey("");
+                            finalOpenaiKey = "";
+                          } else if (tempProvider === "claude") {
+                            localStorage.removeItem("ai_claude_key");
+                            setAiClaudeKey("");
+                            setTempKey("");
+                            finalClaudeKey = "";
+                          } else {
+                            localStorage.removeItem("gemini_api_key");
+                            setApiKey("");
+                            setTempKey("");
+                            finalGeminiKey = "";
+                          }
+
+                          // Update Supabase to delete the key (set to empty string)
+                          handleUpsertSettings({
+                            gemini_api_key: finalGeminiKey,
+                            ai_openai_key: finalOpenaiKey,
+                            ai_claude_key: finalClaudeKey
+                          });
+
                           setShowConfig(false);
                         }}
-                        style={{
-                          padding: "10px 14px", borderRadius: 10,
-                          background: G.coralSoft, color: G.coral,
-                          border: `1px solid rgba(255, 59, 48, 0.15)`,
-                          fontSize: 12, fontWeight: 600,
-                          transition: "all 0.2s",
-                          cursor: "pointer"
-                        }}
-                        onMouseEnter={e => {
-                          e.currentTarget.style.background = G.coral;
-                          e.currentTarget.style.color = "#ffffff";
-                        }}
-                        onMouseLeave={e => {
-                          e.currentTarget.style.background = G.coralSoft;
-                          e.currentTarget.style.color = G.coral;
-                        }}
-                      >
-                        Borrar
-                      </button>
-                    )}
+                          style={{ padding: "10px 14px", borderRadius: 10, background: G.coralSoft, color: G.coral, border: `1px solid rgba(255,59,48,0.15)`, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                          Borrar
+                        </button>
+                      )}
+                    </div>
                   </div>
-                </div>
-              )}
+                );
+              })()}
 
               {/* Contenido Pestaña Conexiones */}
               {configTab === "connections" && (
@@ -5732,12 +7819,11 @@ export default function CerebralApp() {
                       </div>
                       {googleConnected ? (
                         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
-                          <span style={{ fontSize: 10, color: G.green, fontWeight: 700 }}>✓ Conectado</span>
+                          <span style={{ fontSize: 10, color: gmailToken ? G.green : G.amber, fontWeight: 700 }}>
+                            {gmailToken ? "✓ Conectado" : "⚠ Reconectar"}
+                          </span>
                           <button
-                            onClick={() => {
-                              setGoogleConnected(false);
-                              setGoogleConnectedEmail("");
-                            }}
+                            onClick={() => handleGmailDisconnect(gmailToken)}
                             style={{ fontSize: 8, color: G.coral, textDecoration: "underline", padding: 2, border: "none", background: "transparent", cursor: "pointer" }}
                           >
                             Desconectar
@@ -5745,9 +7831,17 @@ export default function CerebralApp() {
                         </div>
                       ) : (
                         <button
-                          onClick={() => {
-                            setSimulatingConnection("google");
-                            setSimulatingStep(1);
+                          onClick={async () => {
+                            try {
+                              if (session?.user?.id) await handlePersistentGmailConnect();
+                              else {
+                                const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+                                if (!clientId) { alert("Configura VITE_GOOGLE_CLIENT_ID en .env.local"); return; }
+                                const token = await requestGmailToken(clientId);
+                                const email = await getGmailUserEmail(token);
+                                handleGmailConnect(token, email);
+                              }
+                            } catch (e) { alert("Error Google: " + e.message); }
                           }}
                           style={{
                             background: G.accentSoft,
@@ -5843,12 +7937,28 @@ export default function CerebralApp() {
           </div>
         )}
 
-        {/* AI Chat Sidebar — barra lateral derecha */}
-        <AIChatSidebar
-          messages={messages}
-          onCaptura={handleCaptura}
-          isLoading={isLoading}
-        />
+        {/* AI — FAB flotante o panel overlay */}
+        <AssistantErrorBoundary
+          resetKey={`${aiOpen}-${messages.length}`}
+          onRecover={() => {
+            localStorage.removeItem("cerebro_messages");
+            setMessages([]);
+            setAiOpen(false);
+            setAiUnread(0);
+          }}
+        >
+          <AIChatSidebar
+            messages={Array.isArray(messages) ? messages : []}
+            onCaptura={handleCaptura}
+            isLoading={isLoading}
+            open={aiOpen}
+            onOpen={() => { setAiOpen(true); setAiUnread(0); }}
+            onClose={() => setAiOpen(false)}
+            unread={aiUnread}
+            darkMode={darkMode}
+            voiceConfig={{ apiKey: aiProvider === "openai" ? aiOpenaiKey : aiProvider === "claude" ? aiClaudeKey : apiKey, provider: aiProvider, baseUrl: aiBaseUrl, model: aiModel }}
+          />
+        </AssistantErrorBoundary>
 
         {/* RightDrawer — edición de tareas, calendario, finanzas */}
         <RightDrawer
@@ -5866,6 +7976,14 @@ export default function CerebralApp() {
           googleConnectedEmail={googleConnectedEmail}
           setGoogleConnected={setGoogleConnected}
           setGoogleConnectedEmail={setGoogleConnectedEmail}
+          onGmailConnect={handleGmailConnect}
+          onPersistentGmailConnect={handlePersistentGmailConnect}
+          onGmailDisconnect={handleGmailDisconnect}
+          gmailToken={gmailToken}
+          bankAccounts={bankAccounts}
+          setBankAccounts={setBankAccounts}
+          gmailEmails={gmailEmails}
+          fetchingEmails={fetchingEmails}
         />
       </div>
     </>

@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <script>
+      (function() {
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.get('oauth_callback') === 'gmail') {
+          const email = urlParams.get('email') || '';
+          const error = urlParams.get('error') || '';
+          if (window.opener) {
+            try {
+              window.opener.postMessage({ type: "cerebro:gmail-connected", email: email, error: error }, "*");
+            } catch (e) {
+              console.error("Error postMessage to opener:", e);
+            }
+          }
+          window.close();
+          // Fallback UI if window.close is blocked or delayed
+          document.documentElement.innerHTML = '<html><head><meta charset="utf-8"><title>Gmail Conectado</title></head><body style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#eef1fb;margin:0;"><div style="text-align:center;padding:32px;background:#ffffff;border-radius:16px;box-shadow:0 8px 30px rgba(0,0,0,0.06);max-width:320px;width:90%;"><div style="font-size:40px;margin-bottom:16px;">✨</div><p style="font-size:17px;font-weight:700;color:#1c1c1e;margin:0 0 8px 0;font-family:\'Century Gothic\',sans-serif;font-style:italic;">¡Gmail Conectado!</p><p style="font-size:13px;color:#8e8e93;line-height:1.4;margin:0;">Esta ventana ya se puede cerrar de forma segura.</p></div></body></html>';
+          window.stop();
+        }
+      })();
+    </script>
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cerebro Personal — Captura y Memoria Inteligente</title>
+    <!-- PDF Generation Libraries -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  </head>
+  <body style="margin: 0; background: #eef1fb; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; min-height: 100vh;">
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

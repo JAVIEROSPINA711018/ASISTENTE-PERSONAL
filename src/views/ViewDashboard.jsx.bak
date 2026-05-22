@@ -1,0 +1,511 @@
+import { useState, useEffect, useMemo } from "react";
+
+// ── Temas ─────────────────────────────────────────────────────────────────────
+const LIGHT = {
+  bg: "#f5f5f7",
+  glass: "#ffffff",
+  glassBorder: "rgba(0,0,0,0.06)",
+  accent: "#0071e3",
+  accentSoft: "rgba(0,113,227,0.08)",
+  amber: "#ff9500",
+  amberSoft: "rgba(255,149,0,0.08)",
+  coral: "#ff3b30",
+  coralSoft: "rgba(255,59,48,0.08)",
+  green: "#34c759",
+  greenSoft: "rgba(52,199,89,0.08)",
+  purple: "#5e5ce6",
+  purpleSoft: "rgba(94,92,230,0.08)",
+  teal: "#24b495",
+  border: "rgba(0,0,0,0.06)",
+  surfaceHigh: "#ffffff",
+  surfaceLow: "#f5f5f7",
+  textPrimary: "#1d1d1f",
+  textSecondary: "#515154",
+  textTertiary: "#86868b",
+};
+const DARK = {
+  bg: "#1c1c1e",
+  glass: "rgba(44,44,46,0.96)",
+  glassBorder: "rgba(255,255,255,0.08)",
+  accent: "#0a84ff",
+  accentSoft: "rgba(10,132,255,0.15)",
+  amber: "#ff9f0a",
+  amberSoft: "rgba(255,159,10,0.12)",
+  coral: "#ff453a",
+  coralSoft: "rgba(255,69,58,0.12)",
+  green: "#30d158",
+  greenSoft: "rgba(48,209,88,0.12)",
+  purple: "#bf5af2",
+  purpleSoft: "rgba(191,90,242,0.12)",
+  teal: "#32d9b6",
+  border: "rgba(255,255,255,0.07)",
+  surfaceHigh: "#2c2c2e",
+  surfaceLow: "#1c1c1e",
+  textPrimary: "#f5f5f7",
+  textSecondary: "#aeaeb2",
+  textTertiary: "#636366",
+};
+
+// ── Utilidades de fecha ───────────────────────────────────────────────────────
+function getHoyISO() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+}
+function getLunesISO() {
+  const d = new Date(); const dow = d.getDay();
+  d.setDate(d.getDate() - ((dow + 6) % 7));
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+}
+function getSieteDiasISO() {
+  const d = new Date(); d.setDate(d.getDate() + 7);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+}
+function fmtPesos(n) {
+  if (n >= 1_000_000) return `$${(n/1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `$${Math.round(n/1_000)}k`;
+  return `$${n}`;
+}
+function getTituloTarea(t) { return t.datos?.titulo || t.titulo || t.texto || "Sin título"; }
+function fmtFechaCorta(iso) {
+  if (!iso) return "";
+  const [, m, d] = iso.split("-").map(Number);
+  const hoy = getHoyISO();
+  if (iso === hoy) return "Hoy";
+  const man = (() => {
+    const t = new Date(); t.setDate(t.getDate()+1);
+    return `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,"0")}-${String(t.getDate()).padStart(2,"0")}`;
+  })();
+  if (iso === man) return "Mañana";
+  return `${d} ${["","ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"][m]}`;
+}
+
+// ── Iconos SVG ────────────────────────────────────────────────────────────────
+const IcoCalendar   = ({c}) => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={c||"currentColor"} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>;
+const IcoCheckCircle= ({c}) => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={c||"currentColor"} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>;
+const IcoWallet     = ({c}) => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={c||"currentColor"} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 7H4a2 2 0 00-2 2v10a2 2 0 002 2h16a2 2 0 002-2V9a2 2 0 00-2-2z"/><path d="M16 3H8L4 7h16l-4-4z"/></svg>;
+const IcoMail       = ({c}) => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={c||"currentColor"} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>;
+const IcoNote       = ({c}) => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={c||"currentColor"} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>;
+const IcoTask       = ({c}) => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={c||"currentColor"} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>;
+const IcoDollar     = ({c}) => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={c||"currentColor"} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>;
+const IcoEvent      = ({c}) => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={c||"currentColor"} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>;
+const IcoPlus       = ({c,s=20}) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={c||"currentColor"} strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>;
+const IcoVideo      = ({c}) => <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={c||"currentColor"} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>;
+
+// ── Componente principal ──────────────────────────────────────────────────────
+export default function ViewDashboard({
+  items = [], onNavigate, onOpenDrawer, darkMode = false,
+  apiKey = "", aiConfig, googleConnectedEmail = "",
+  gmailEmails = [], fetchingEmails = false, onRefreshEmails,
+}) {
+  const G = darkMode ? DARK : LIGHT;
+
+  // Reloj en vivo
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 30_000);
+    return () => clearInterval(t);
+  }, []);
+
+  // Índices de fecha
+  const hoyISO    = useMemo(() => getHoyISO(), []);
+  const en7ISO    = useMemo(() => getSieteDiasISO(), []);
+  const mesActual = useMemo(() => hoyISO.slice(0, 7), [hoyISO]);
+
+  // Datos derivados
+  const tareasPendientes = useMemo(() => items.filter(i => (i.tipo==="tarea"||i.tipo==="recordatorio") && !i.hecho), [items]);
+  const tareasTotal      = useMemo(() => items.filter(i => i.tipo==="tarea"||i.tipo==="recordatorio"), [items]);
+  const tareasHechas     = useMemo(() => tareasTotal.filter(i => i.hecho), [tareasTotal]);
+  const progresoTareas   = tareasTotal.length > 0 ? Math.round((tareasHechas.length / tareasTotal.length) * 100) : 0;
+
+  const notas      = useMemo(() => items.filter(i => i.tipo==="nota"), [items]);
+  const gastosMes  = useMemo(() => items.filter(i => i.tipo==="gasto" && i.creado?.startsWith(mesActual)), [items, mesActual]);
+  const totalGastos= useMemo(() => gastosMes.reduce((s, i) => s+(Number(i.datos?.monto)||0), 0), [gastosMes]);
+  const ingresosMes= useMemo(() => items.filter(i => i.tipo==="ingreso" && i.creado?.startsWith(mesActual)).reduce((s, i) => s+(Number(i.datos?.monto)||0), 0), [items, mesActual]);
+
+  // Agenda: próximas tareas con fecha en los 7 días
+  const agendaItems = useMemo(() =>
+    tareasPendientes
+      .filter(i => i.fecha && i.fecha.slice(0,10) >= hoyISO && i.fecha.slice(0,10) <= en7ISO)
+      .sort((a, b) => (a.fecha||"").localeCompare(b.fecha||""))
+      .slice(0, 4),
+  [tareasPendientes, hoyISO, en7ISO]);
+
+  const topTareas = useMemo(() => tareasPendientes.slice(0, 3), [tareasPendientes]);
+  const topEmails = useMemo(() => gmailEmails.slice(0, 3), [gmailEmails]);
+
+  // Mini gráfico de gastos (últimos 6 meses)
+  const miniBarHeights = useMemo(() => {
+    const meses = Array.from({length: 6}, (_, i) => {
+      const d = new Date(); d.setMonth(d.getMonth() - (5-i));
+      return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+    });
+    const vals = meses.map(m => items.filter(i => i.tipo==="gasto" && i.creado?.startsWith(m)).reduce((s, i) => s+(Number(i.datos?.monto)||0), 0));
+    const mx = Math.max(...vals, 1);
+    return vals.map(v => Math.max(8, Math.round((v/mx)*100)));
+  }, [items]);
+
+  // Saludo dinámico
+  const greeting = useMemo(() => {
+    const h = now.getHours();
+    if (h < 12) return "¡Buenos días";
+    if (h < 19) return "¡Buenas tardes";
+    return "¡Buenas noches";
+  }, [now]);
+  const dateLabel = useMemo(() => now.toLocaleDateString("es-CO", { weekday:"long", day:"numeric", month:"long" }), [now]);
+  const timeLabel = useMemo(() => now.toLocaleTimeString("es-CO", { hour:"2-digit", minute:"2-digit" }), [now]);
+
+  // Nombre corto del usuario
+  const userName = useMemo(() => {
+    if (!googleConnectedEmail) return "";
+    const name = googleConnectedEmail.split("@")[0];
+    return name.charAt(0).toUpperCase() + name.slice(1);
+  }, [googleConnectedEmail]);
+
+  // ── Estilos base ────────────────────────────────────────────────────────────
+  const glassCard = {
+    background: darkMode ? G.glass : "#ffffff",
+    border: `1px solid ${G.glassBorder}`,
+    borderRadius: 20,
+    boxShadow: darkMode ? "0 4px 20px rgba(0,0,0,0.28)" : "0 2px 16px rgba(0,0,0,0.06), 0 1px 4px rgba(0,0,0,0.04)",
+    transition: "transform 0.25s ease, box-shadow 0.25s ease",
+  };
+
+  function onCardIn(e)  { e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.boxShadow = darkMode ? "0 12px 40px rgba(0,0,0,0.45)" : "0 8px 32px rgba(0,0,0,0.10), 0 2px 8px rgba(0,0,0,0.06)"; }
+  function onCardOut(e) { e.currentTarget.style.transform = "translateY(0)";    e.currentTarget.style.boxShadow = darkMode ? "0 4px 20px rgba(0,0,0,0.28)"  : "0 2px 16px rgba(0,0,0,0.06), 0 1px 4px rgba(0,0,0,0.04)"; }
+
+  const AGENDA_COLORS = [G.accent, G.amber, G.purple, G.textTertiary];
+  const EMAIL_BORDERS = [G.amber, G.teal, G.purple];
+
+  return (
+    <div style={{ flex:1, overflowY:"auto", padding:"32px 40px 56px", background:G.bg, transition:"background 0.25s" }}>
+
+      {/* ── Encabezado de saludo ─────────────────────────────────────────────── */}
+      <header style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-end", marginBottom:36 }}>
+        <div>
+          <h2 style={{ fontSize:52, fontWeight:800, color:G.textPrimary, letterSpacing:"-0.05em", lineHeight:1.0, margin:0 }}>
+            {greeting}{userName ? `, ${userName}` : ""}!
+          </h2>
+          <p style={{ fontSize:19, color:G.textSecondary, margin:"10px 0 0", fontWeight:400, letterSpacing:"-0.015em" }}>
+            Aquí tienes el resumen ejecutivo de tu día.
+          </p>
+        </div>
+        <div style={{ textAlign:"right", flexShrink:0 }}>
+          <p style={{ fontSize:14, color:G.textTertiary, margin:0, fontWeight:500, textTransform:"capitalize" }}>{dateLabel}</p>
+          <p style={{ fontSize:36, fontWeight:700, color:G.accent, margin:"4px 0 0", letterSpacing:"-0.04em", lineHeight:1 }}>{timeLabel}</p>
+        </div>
+      </header>
+
+      {/* ── Bento Grid 3 columnas ────────────────────────────────────────────── */}
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gridTemplateRows:"auto auto", gap:24 }}>
+
+        {/* ── Tarjeta 1: Agenda y Reuniones (doble altura) ─────────────────── */}
+        <section
+          style={{ ...glassCard, padding:24, gridRow:"span 2", display:"flex", flexDirection:"column" }}
+          onMouseEnter={onCardIn} onMouseLeave={onCardOut}
+        >
+          <div style={{ display:"flex", alignItems:"center", marginBottom:20 }}>
+            <h4 style={{ fontSize:18, fontWeight:700, color:G.textPrimary, margin:0, display:"flex", alignItems:"center", gap:8 }}>
+              <IcoCalendar c={G.accent}/>
+              Agenda y Reuniones
+            </h4>
+          </div>
+
+          <div style={{ flex:1, display:"flex", flexDirection:"column", gap:8 }}>
+            {agendaItems.length === 0 ? (
+              <div style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:8, color:G.textTertiary, padding:"24px 0" }}>
+                <IcoCalendar c={G.textTertiary}/>
+                <span style={{ fontSize:13 }}>Sin eventos próximos</span>
+                <span style={{ fontSize:11, color:G.textTertiary }}>Los próximos 7 días están libres</span>
+              </div>
+            ) : agendaItems.map((t, i) => {
+              const color     = AGENDA_COLORS[i] || G.textTertiary;
+              const isFirst   = i === 0;
+              const faded     = i === agendaItems.length - 1 && i > 1;
+              const fechaDate = t.fecha ? new Date(t.fecha + "T12:00:00") : null;
+              const dia       = fechaDate ? fechaDate.getDate() : "?";
+              const mesCorto  = fechaDate ? ["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"][fechaDate.getMonth()] : "";
+
+              return (
+                <div key={t.id||i}
+                  style={{
+                    display:"flex", gap:12, padding:"10px 12px",
+                    background: isFirst ? `${G.accent}08` : "transparent",
+                    borderRadius:12,
+                    border:`1px solid ${isFirst ? G.accent+"18" : "transparent"}`,
+                    opacity: faded ? 0.5 : 1,
+                    cursor:"pointer", transition:"background 0.15s",
+                  }}
+                  onMouseEnter={e => { if (!isFirst) e.currentTarget.style.background = darkMode ? "rgba(255,255,255,0.04)" : G.surfaceLow; }}
+                  onMouseLeave={e => { if (!isFirst) e.currentTarget.style.background = "transparent"; }}
+                >
+                  {/* Cuadro de fecha */}
+                  <div style={{ width:48, height:48, borderRadius:12, background:`${color}15`, color, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
+                    <span style={{ fontSize:14, fontWeight:800, lineHeight:1 }}>{dia}</span>
+                    <span style={{ fontSize:9, fontWeight:700, textTransform:"uppercase" }}>{mesCorto}</span>
+                  </div>
+
+                  {/* Texto */}
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <p style={{ fontSize:14, fontWeight:600, color:G.textPrimary, margin:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                      {getTituloTarea(t)}
+                    </p>
+                    <p style={{ fontSize:12, color:G.textTertiary, margin:"2px 0 0" }}>
+                      {fmtFechaCorta(t.fecha?.slice(0,10))}
+                    </p>
+                    {isFirst && (
+                      <button
+                        onClick={() => onNavigate("tareas")}
+                        style={{ marginTop:6, display:"inline-flex", alignItems:"center", gap:5, padding:"3px 10px", background:G.accent, color:"#fff", borderRadius:20, fontSize:11, fontWeight:700, border:"none", cursor:"pointer" }}
+                      >
+                        <IcoVideo c="#fff"/>
+                        Ver tarea
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <button
+            onClick={() => onNavigate("calendario")}
+            style={{ marginTop:16, width:"100%", padding:"9px 0", color:G.accent, fontWeight:700, fontSize:13, border:`1px solid ${G.accent}30`, borderRadius:10, background:"none", cursor:"pointer", transition:"background 0.15s" }}
+            onMouseEnter={e => e.currentTarget.style.background = `${G.accent}08`}
+            onMouseLeave={e => e.currentTarget.style.background = "none"}
+          >
+            Ver Calendario Completo
+          </button>
+        </section>
+
+        {/* ── Tarjeta 2: Tareas Activas ────────────────────────────────────── */}
+        <section
+          style={{ ...glassCard, padding:24, display:"flex", flexDirection:"column" }}
+          onMouseEnter={onCardIn} onMouseLeave={onCardOut}
+        >
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:14 }}>
+            <h4 style={{ fontSize:18, fontWeight:700, color:G.textPrimary, margin:0, display:"flex", alignItems:"center", gap:8 }}>
+              <IcoCheckCircle c={G.green}/>
+              Tareas Activas
+            </h4>
+            <span style={{ fontSize:26, fontWeight:800, color:G.accent, letterSpacing:"-0.03em", lineHeight:1 }}>
+              {progresoTareas}%
+            </span>
+          </div>
+
+          {/* Barra de progreso */}
+          <div style={{ width:"100%", height:10, borderRadius:20, background:G.surfaceHigh, overflow:"hidden", marginBottom:18 }}>
+            <div style={{
+              height:"100%", width:`${progresoTareas}%`, background:G.accent,
+              borderRadius:20, boxShadow:`0 0 8px ${G.accent}66`,
+              transition:"width 0.6s ease",
+            }}/>
+          </div>
+
+          {/* Lista de tareas */}
+          <div style={{ display:"flex", flexDirection:"column", gap:8, flex:1 }}>
+            {topTareas.length === 0 ? (
+              <div style={{ textAlign:"center", padding:"20px 0", color:G.textTertiary, fontSize:12 }}>
+                Sin tareas pendientes
+              </div>
+            ) : topTareas.map((t, i) => (
+              <div key={t.id||i}
+                style={{
+                  display:"flex", alignItems:"center", gap:12, padding:"10px 12px",
+                  background: darkMode ? "rgba(255,255,255,0.05)" : "rgba(255,255,255,0.5)",
+                  borderRadius:12, cursor:"pointer",
+                  border:`1px solid ${G.glassBorder}`,
+                  transition:"background 0.15s",
+                }}
+                onClick={() => onNavigate("tareas")}
+                onMouseEnter={e => e.currentTarget.style.background = darkMode ? "rgba(255,255,255,0.09)" : "rgba(255,255,255,0.85)"}
+                onMouseLeave={e => e.currentTarget.style.background = darkMode ? "rgba(255,255,255,0.05)" : "rgba(255,255,255,0.5)"}
+              >
+                <div style={{ width:18, height:18, borderRadius:4, border:`2px solid ${G.accent}55`, flexShrink:0 }}/>
+                <span style={{ flex:1, fontSize:13, color:G.textPrimary, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                  {getTituloTarea(t)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        {/* ── Tarjeta 3: Finanzas ──────────────────────────────────────────── */}
+        <section
+          style={{
+            ...glassCard, padding:24, display:"flex", flexDirection:"column",
+            background: darkMode
+              ? "linear-gradient(135deg,rgba(10,132,255,0.07) 0%,rgba(191,90,242,0.07) 100%)"
+              : "linear-gradient(135deg,rgba(0,113,227,0.05) 0%,rgba(94,92,230,0.05) 100%)",
+          }}
+          onMouseEnter={onCardIn} onMouseLeave={onCardOut}
+        >
+          <div style={{ display:"flex", alignItems:"center", marginBottom:14 }}>
+            <h4 style={{ fontSize:18, fontWeight:700, color:G.textPrimary, margin:0, display:"flex", alignItems:"center", gap:8 }}>
+              <IcoWallet c={G.accent}/>
+              Finanzas
+            </h4>
+          </div>
+
+          <div style={{ marginBottom:14 }}>
+            <p style={{ fontSize:10, fontWeight:700, color:G.textTertiary, textTransform:"uppercase", letterSpacing:"0.08em", margin:"0 0 2px" }}>
+              Gastos del Mes
+            </p>
+            <h5 style={{ fontSize:28, fontWeight:800, color:G.textPrimary, margin:0, letterSpacing:"-0.02em" }}>
+              {fmtPesos(totalGastos)}
+            </h5>
+          </div>
+
+          {/* Chips ingresos / gastos */}
+          <div style={{ display:"flex", gap:10, marginBottom:14 }}>
+            {[
+              { label:"Ingresos", value:`+${fmtPesos(ingresosMes)}`, color:G.green },
+              { label:"Gastos",   value:`-${fmtPesos(totalGastos)}`, color:G.coral },
+            ].map(chip => (
+              <div key={chip.label} style={{
+                flex:1, padding:"8px 12px", borderRadius:12,
+                background: darkMode ? "rgba(255,255,255,0.06)" : "rgba(255,255,255,0.6)",
+                border: darkMode ? "1px solid rgba(255,255,255,0.08)" : "1px solid rgba(255,255,255,0.9)",
+              }}>
+                <p style={{ fontSize:10, fontWeight:700, color:G.textTertiary, textTransform:"uppercase", margin:"0 0 2px" }}>{chip.label}</p>
+                <p style={{ fontSize:13, fontWeight:700, color:chip.color, margin:0 }}>{chip.value}</p>
+              </div>
+            ))}
+          </div>
+
+          {/* Mini gráfico de barras */}
+          <div style={{ height:60, display:"flex", alignItems:"flex-end", gap:4 }}>
+            {miniBarHeights.map((h, i) => (
+              <div key={i} style={{
+                flex:1, borderRadius:"3px 3px 0 0",
+                background: i === miniBarHeights.length-1 ? G.accent : `${G.accent}${i > 3 ? "44" : "28"}`,
+                height:`${h}%`, transition:"height 0.5s ease",
+              }}/>
+            ))}
+          </div>
+        </section>
+
+        {/* ── Tarjeta 4: Correos Importantes ──────────────────────────────── */}
+        <section
+          style={{ ...glassCard, padding:24, display:"flex", flexDirection:"column" }}
+          onMouseEnter={onCardIn} onMouseLeave={onCardOut}
+        >
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:18 }}>
+            <h4 style={{ fontSize:18, fontWeight:700, color:G.textPrimary, margin:0, display:"flex", alignItems:"center", gap:8 }}>
+              <IcoMail c={G.amber}/>
+              Correos Importantes
+            </h4>
+            <span style={{ background:G.amberSoft, color:G.amber, fontSize:10, fontWeight:700, padding:"3px 8px", borderRadius:20, border:`1px solid ${G.amber}30` }}>
+              RESUMEN IA
+            </span>
+          </div>
+
+          <div style={{ display:"flex", flexDirection:"column", gap:14, flex:1 }}>
+            {topEmails.length === 0 ? (
+              <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center", color:G.textTertiary, fontSize:12, textAlign:"center" }}>
+                {googleConnectedEmail ? (fetchingEmails ? "Cargando correos…" : "Sin correos recientes") : "Conecta Gmail para ver correos"}
+              </div>
+            ) : topEmails.map((email, i) => (
+              <div key={email.id||i}
+                onClick={() => onNavigate("correos")}
+                style={{ paddingLeft:14, borderLeft:`2px solid ${EMAIL_BORDERS[i%3]}50`, cursor:"pointer" }}
+              >
+                <p style={{ fontSize:13, fontWeight:700, color:G.textPrimary, margin:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                  {email.asunto || email.subject || email.de || "Sin asunto"}
+                </p>
+                <p style={{ fontSize:12, color:G.textSecondary, margin:"3px 0 0", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                  {email.resumen || email.fragmento || email.snippet || email.de || ""}
+                </p>
+              </div>
+            ))}
+          </div>
+
+          {googleConnectedEmail && (
+            <button
+              onClick={() => onNavigate("correos")}
+              style={{ marginTop:14, fontSize:12, color:G.accent, fontWeight:600, background:"none", border:"none", cursor:"pointer", textAlign:"left", padding:0 }}
+            >
+              Ver todos los correos →
+            </button>
+          )}
+        </section>
+
+        {/* ── Tarjeta 5: Notas Recientes ───────────────────────────────────── */}
+        <section
+          style={{ ...glassCard, padding:24, display:"flex", flexDirection:"column" }}
+          onMouseEnter={onCardIn} onMouseLeave={onCardOut}
+        >
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:18 }}>
+            <h4 style={{ fontSize:18, fontWeight:700, color:G.textPrimary, margin:0, display:"flex", alignItems:"center", gap:8 }}>
+              <IcoNote c={G.purple}/>
+              Notas Recientes
+            </h4>
+            <button
+              onClick={() => onNavigate("notas")}
+              style={{ background:"none", border:"none", color:G.accent, cursor:"pointer", padding:2, display:"flex", alignItems:"center" }}
+            >
+              <IcoPlus c={G.accent} s={22}/>
+            </button>
+          </div>
+
+          {notas.length === 0 ? (
+            <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center", color:G.textTertiary, fontSize:12, textAlign:"center" }}>
+              Sin notas guardadas
+            </div>
+          ) : (
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+              {notas.slice(0, 4).map((nota, i) => {
+                const NC = [G.amber, G.purple, G.teal, G.accent][i % 4];
+                return (
+                  <div key={nota.id||i}
+                    onClick={() => onNavigate("notas")}
+                    style={{ padding:"10px 12px", background:`${NC}08`, borderLeft:`4px solid ${NC}`, borderRadius:"0 10px 10px 0", cursor:"pointer", transition:"background 0.15s" }}
+                    onMouseEnter={e => e.currentTarget.style.background = `${NC}16`}
+                    onMouseLeave={e => e.currentTarget.style.background = `${NC}08`}
+                  >
+                    <h5 style={{ fontSize:13, fontWeight:700, color:G.textPrimary, margin:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                      {nota.datos?.titulo || nota.titulo || "Nota"}
+                    </h5>
+                    <p style={{ fontSize:11, color:G.textTertiary, margin:"3px 0 0", overflow:"hidden", display:"-webkit-box", WebkitLineClamp:2, WebkitBoxOrient:"vertical" }}>
+                      {nota.datos?.contenido || nota.contenido || nota.texto || ""}
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
+
+      </div>{/* fin bento grid */}
+
+      {/* ── Acciones Rápidas ─────────────────────────────────────────────────── */}
+      <div style={{ marginTop:40 }}>
+        <h4 style={{ fontSize:13, fontWeight:600, color:G.textTertiary, marginBottom:14, letterSpacing:"0.03em", textTransform:"uppercase" }}>Acciones Rápidas</h4>
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:12 }}>
+          {[
+            { label:"Nueva Tarea",     icon:<IcoTask    c={G.accent}/>, iconBg:G.accentSoft, action:()=>onNavigate("tareas")    },
+            { label:"Crear Nota",      icon:<IcoNote    c={G.amber}/>,  iconBg:G.amberSoft,  action:()=>onNavigate("notas")     },
+            { label:"Registrar Gasto", icon:<IcoDollar  c={G.green}/>,  iconBg:G.greenSoft,  action:()=>onNavigate("finanzas")  },
+            { label:"Nuevo Evento",    icon:<IcoEvent   c={G.purple}/>, iconBg:G.purpleSoft, action:()=>onNavigate("calendario") },
+          ].map(a => (
+            <button key={a.label} onClick={a.action}
+              style={{
+                ...glassCard, padding:"18px 20px",
+                display:"flex", alignItems:"center", gap:14,
+                cursor:"pointer", background: darkMode ? G.glass : "#ffffff", textAlign:"left", border:"none",
+                boxShadow: darkMode ? "0 2px 12px rgba(0,0,0,0.25)" : "0 1px 8px rgba(0,0,0,0.07), 0 1px 3px rgba(0,0,0,0.04)",
+              }}
+              onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.boxShadow = darkMode ? "0 10px 30px rgba(0,0,0,0.4)" : "0 8px 28px rgba(0,0,0,0.12)"; }}
+              onMouseLeave={e => { e.currentTarget.style.transform = "translateY(0)";    e.currentTarget.style.boxShadow = darkMode ? "0 2px 12px rgba(0,0,0,0.25)" : "0 1px 8px rgba(0,0,0,0.07), 0 1px 3px rgba(0,0,0,0.04)"; }}
+            >
+              <div style={{ width:44, height:44, borderRadius:14, background:a.iconBg, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
+                {a.icon}
+              </div>
+              <span style={{ fontSize:15, fontWeight:600, color:G.textPrimary, letterSpacing:"-0.01em" }}>{a.label}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+    </div>
+  );
+}

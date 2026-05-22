@@ -115,7 +115,25 @@ export async function upsertSettings(patch, userId) {
   const { error } = await supabase
     .from("settings")
     .upsert({ ...patch, user_id: userId }, { onConflict: "user_id" });
-  if (error) throw error;
+  if (error) {
+    // Si es un error de columna no existente (código 42703 en Postgres) o contiene la palabra "column", reintentamos solo con columnas base
+    if (error.code === "42703" || error.message?.includes("column") || error.message?.includes("does not exist")) {
+      console.warn("[supabase] Columnas de IA ausentes en la tabla settings. Guardando solo campos base en Supabase.");
+      const basePatch = {};
+      const baseKeys = ["dark_mode", "mood", "diario", "habits", "personality", "google_email"];
+      baseKeys.forEach(k => {
+        if (patch[k] !== undefined) basePatch[k] = patch[k];
+      });
+      if (Object.keys(basePatch).length > 0) {
+        const { error: baseError } = await supabase
+          .from("settings")
+          .upsert({ ...basePatch, user_id: userId }, { onConflict: "user_id" });
+        if (baseError) throw baseError;
+      }
+      return;
+    }
+    throw error;
+  }
 }
 
 // ── Messages ──────────────────────────────────────────────────────────────────
@@ -148,33 +166,101 @@ export async function migrateLocalStorageToSupabase(userId) {
   const migKey = `cerebro_migrated_${userId}`;
   if (localStorage.getItem(migKey)) return; // ya migró
 
-  let items     = [];
-  let contactos = [];
-  let eventos   = [];
-  let messages  = [];
-  let settings  = {};
-
-  try { items     = JSON.parse(localStorage.getItem("cerebro_items")     || "[]"); } catch {}
-  try { contactos = JSON.parse(localStorage.getItem("cerebro_contactos") || "[]"); } catch {}
-  try { eventos   = JSON.parse(localStorage.getItem("cerebro_eventos")   || "[]"); } catch {}
-  try { messages  = JSON.parse(localStorage.getItem("cerebro_messages")  || "[]"); } catch {}
-
-  settings = {
-    dark_mode:    localStorage.getItem("cerebro_dark")        === "true",
-    mood:         localStorage.getItem("cerebro_mood")         || null,
-    diario:       localStorage.getItem("cerebro_diario")       || null,
-    habits:       (() => { try { return JSON.parse(localStorage.getItem("cerebro_habits") || "null"); } catch { return null; } })(),
-    personality:  localStorage.getItem("cerebro_personality")  || "profesional",
-    google_email: localStorage.getItem("cerebro_google_email") || null,
-    gemini_api_key: null, // nunca migrar la API key desde localStorage por seguridad
-  };
-
   try {
+    // 1. Verificar si el usuario ya tiene registros de configuración en Supabase
+    // Si ya existe una fila, significa que ya está inicializado en la nube y no debemos sobreescribir.
+    const { data: existingSettings, error: errSettings } = await supabase
+      .from("settings")
+      .select("user_id")
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (errSettings) {
+      console.warn("[supabase] Error al verificar settings existentes:", errSettings.message);
+    }
+
+    if (existingSettings) {
+      localStorage.setItem(migKey, "1");
+      console.info("[supabase] El usuario ya tiene configuración en Supabase. Saltando migración local para proteger los datos en la nube.");
+      return;
+    }
+
+    // 2. Verificar si hay datos locales reales para migrar
+    const localItems = localStorage.getItem("cerebro_items");
+    const localContactos = localStorage.getItem("cerebro_contactos");
+    const localEventos = localStorage.getItem("cerebro_eventos");
+    const localMessages = localStorage.getItem("cerebro_messages");
+    const localDark = localStorage.getItem("cerebro_dark");
+    const localMood = localStorage.getItem("cerebro_mood");
+    const localDiario = localStorage.getItem("cerebro_diario");
+    const localHabits = localStorage.getItem("cerebro_habits");
+    const localPersonality = localStorage.getItem("cerebro_personality");
+    const localGoogleEmail = localStorage.getItem("cerebro_google_email");
+    const localGeminiKey = localStorage.getItem("gemini_api_key");
+    const localOpenaiKey = localStorage.getItem("ai_openai_key");
+    const localClaudeKey = localStorage.getItem("ai_claude_key");
+    const localAiProvider = localStorage.getItem("ai_provider");
+    const localAiBaseUrl = localStorage.getItem("ai_base_url");
+    const localGeminiModel = localStorage.getItem("ai_gemini_model");
+    const localOpenaiModel = localStorage.getItem("ai_openai_model");
+    const localClaudeModel = localStorage.getItem("ai_claude_model");
+
+    const hasAnyData = localItems || localContactos || localEventos || localMessages ||
+                       localDark || localMood || localDiario || localHabits ||
+                       localPersonality || localGoogleEmail || localGeminiKey ||
+                       localOpenaiKey || localClaudeKey || localAiProvider ||
+                       localAiBaseUrl || localGeminiModel || localOpenaiModel ||
+                       localClaudeModel;
+
+    if (!hasAnyData) {
+      localStorage.setItem(migKey, "1");
+      console.info("[supabase] No hay datos locales para migrar. Saltando de forma segura.");
+      return;
+    }
+
+    // 3. Proceder con la migración de datos locales
+    let items     = [];
+    let contactos = [];
+    let eventos   = [];
+    let messages  = [];
+    let settings  = {};
+
+    try { if (localItems) items = JSON.parse(localItems); } catch {}
+    try { if (localContactos) contactos = JSON.parse(localContactos); } catch {}
+    try { if (localEventos) eventos = JSON.parse(localEventos); } catch {}
+    try { if (localMessages) messages = JSON.parse(localMessages); } catch {}
+
+    // Construir los settings dinámicamente con lo que exista en localStorage
+    if (localDark !== null && localDark !== undefined) {
+      settings.dark_mode = localDark === "true";
+    }
+    if (localMood) settings.mood = localMood;
+    if (localDiario) settings.diario = localDiario;
+    if (localHabits) {
+      try { settings.habits = JSON.parse(localHabits); } catch {}
+    }
+    if (localPersonality) settings.personality = localPersonality;
+    if (localGoogleEmail) settings.google_email = localGoogleEmail;
+    
+    // Migrar llaves de API si existen en localStorage
+    if (localGeminiKey) settings.gemini_api_key = localGeminiKey;
+    if (localOpenaiKey) settings.ai_openai_key = localOpenaiKey;
+    if (localClaudeKey) settings.ai_claude_key = localClaudeKey;
+
+    // Migrar configuraciones adicionales de IA
+    if (localAiProvider) settings.ai_provider = localAiProvider;
+    if (localAiBaseUrl) settings.ai_base_url = localAiBaseUrl;
+    if (localGeminiModel) settings.ai_gemini_model = localGeminiModel;
+    if (localOpenaiModel) settings.ai_openai_model = localOpenaiModel;
+    if (localClaudeModel) settings.ai_claude_model = localClaudeModel;
+
     await Promise.all([
       items.length     ? syncItems(items, userId)               : null,
       contactos.length ? syncContactos(contactos, userId)       : null,
       eventos.length   ? syncEventos(eventos, userId)           : null,
-      upsertSettings(settings, userId),
+      upsertSettings(settings, userId).catch(err => {
+        console.error("[supabase] Error migrando settings locales (posiblemente por columnas ausentes):", err.message);
+      }),
     ].filter(Boolean));
 
     // Messages use INSERT (not upsert) — migrate separately with deduplication guard

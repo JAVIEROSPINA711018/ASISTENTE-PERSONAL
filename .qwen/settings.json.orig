@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run *)",
+      "Bash(lsof *)",
+      "Bash(kill *)",
+      "Bash(mkdir *)",
+      "Bash(touch *)",
+      "Bash(cp *)",
+      "Bash(pkill *)",
+      "Bash(sed *)",
+      "Bash(rm *)"
+    ]
+  },
+  "$version": 4
+}

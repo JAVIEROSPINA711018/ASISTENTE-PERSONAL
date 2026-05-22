@@ -2,13 +2,72 @@
 import { useState } from "react";
 import { supabase } from "../lib/supabase.js";
 
+const authCSS = `
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800;900&display=swap');
+  
+  *, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  body {
+    font-family: Inter, -apple-system, BlinkMacSystemFont, sans-serif;
+  }
+
+  @keyframes nebulaFloat {
+    0%, 100% { transform: translate(0, 0) scale(1) rotate(0deg); }
+    33% { transform: translate(4%, 3%) scale(1.05) rotate(5deg); }
+    66% { transform: translate(-3%, 5%) scale(0.96) rotate(-4deg); }
+  }
+
+  .bg-radial-glow {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    background: radial-gradient(circle at 15% 25%, rgba(31, 58, 82, 0.05) 0%, transparent 45%),
+                radial-gradient(circle at 85% 75%, rgba(144, 27, 47, 0.04) 0%, transparent 45%);
+    pointer-events: none;
+    animation: nebulaFloat 20s ease-in-out infinite;
+  }
+  
+  .dark-glow {
+    background: radial-gradient(circle at 15% 25%, rgba(59, 130, 246, 0.08) 0%, transparent 45%),
+                radial-gradient(circle at 85% 75%, rgba(144, 27, 47, 0.06) 0%, transparent 45%),
+                radial-gradient(circle at 50% 50%, rgba(139, 92, 246, 0.04) 0%, transparent 55%) !important;
+  }
+
+  /* Tactile Spring Physics */
+  button, input {
+    transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1), 
+                background-color 0.25s ease, 
+                color 0.25s ease, 
+                box-shadow 0.4s cubic-bezier(0.34, 1.56, 0.64, 1), 
+                border-color 0.3s ease !important;
+  }
+
+  button:active {
+    transform: scale(0.96) !important;
+  }
+
+  .login-card {
+    transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+
+  input::placeholder {
+    color: var(--text-placeholder);
+    opacity: 0.7;
+  }
+`;
+
 export default function AuthScreen({ onAuth, darkMode }) {
-  const bg      = darkMode ? "#0f0f14" : "#f0f0f5";
-  const surface = darkMode ? "#1a1a24" : "#ffffff";
-  const border  = darkMode ? "rgba(255,255,255,0.10)" : "rgba(0,0,0,0.10)";
-  const text     = darkMode ? "#f5f5f7" : "#1d1d1f";
-  const textSub  = darkMode ? "#aeaeb2" : "#515154";
-  const accent   = darkMode ? "#0a84ff" : "#0071e3";
+  const bg      = darkMode ? "#070913" : "#f8fafc";
+  const surface = darkMode ? "rgba(15, 20, 35, 0.65)" : "rgba(255, 255, 255, 0.80)";
+  const border  = darkMode ? "rgba(255, 255, 255, 0.07)" : "rgba(31, 58, 82, 0.05)";
+  const text     = darkMode ? "#f8fafc" : "#0f172a";
+  const textSub  = darkMode ? "#94a3b8" : "#475569";
+  const accent   = darkMode ? "#3b82f6" : "#1F3A52";
+  const textPlaceholder = darkMode ? "#475569" : "#94a3b8";
 
   const [mode, setMode]         = useState("login"); // 'login' | 'registro'
   const [email, setEmail]       = useState("");
@@ -21,15 +80,18 @@ export default function AuthScreen({ onAuth, darkMode }) {
   const [focusedField, setFocusedField] = useState(null);
 
   const labelStyle = {
-    fontSize: 11, fontWeight: 600, color: textSub,
-    textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 5, display: "block",
+    fontSize: 10, fontWeight: 700, color: textSub,
+    textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6, display: "block",
+    fontFamily: "Inter, sans-serif",
   };
+
   const inputStyle = {
-    width: "100%", padding: "10px 12px", borderRadius: 10,
-    background: darkMode ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.04)",
-    border: `1px solid ${border}`, color: text, fontSize: 14,
+    width: "100%", padding: "11px 14px", borderRadius: 12,
+    background: darkMode ? "rgba(255, 255, 255, 0.05)" : "rgba(31, 58, 82, 0.04)",
+    border: `1px solid ${border}`, color: text, fontSize: 13.5,
     outline: "none", boxSizing: "border-box",
-    fontFamily: "inherit", transition: "border 0.15s",
+    fontFamily: "Inter, sans-serif",
+    "--text-placeholder": textPlaceholder,
   };
 
   async function handleSubmit(e) {
@@ -78,49 +140,79 @@ export default function AuthScreen({ onAuth, darkMode }) {
     <div style={{
       minHeight: "100vh", background: bg, display: "flex",
       alignItems: "center", justifyContent: "center",
-      fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif",
+      fontFamily: "Inter, sans-serif",
       padding: 20,
+      position: "relative",
+      overflow: "hidden",
     }}>
-      <div style={{ width: "100%", maxWidth: 380 }}>
+      <style>{authCSS}</style>
+      <div className={`bg-radial-glow ${darkMode ? "dark-glow" : ""}`} />
 
-        {/* Logo */}
-        <div style={{ textAlign: "center", marginBottom: 36 }}>
+      <div style={{ width: "100%", maxWidth: 380, position: "relative", zIndex: 2 }}>
+
+        {/* Logo & Marca */}
+        <div style={{ textAlign: "center", marginBottom: 30 }}>
+          {/* Double overlapping squares logo (Crimson & Deep Blue) */}
           <div style={{
-            width: 52, height: 52, borderRadius: 14, margin: "0 auto 14px",
-            background: "linear-gradient(135deg,#0071e3,#5e5ce6)",
+            width: 52, height: 52, borderRadius: 14, margin: "0 auto 16px",
+            background: "linear-gradient(135deg, #1F3A52 0%, #901B2F 100%)",
             display: "flex", alignItems: "center", justifyContent: "center",
+            boxShadow: darkMode 
+              ? "0 8px 24px rgba(144, 27, 47, 0.25), 0 0 0 1px rgba(255,255,255,0.06)" 
+              : "0 8px 24px rgba(31, 58, 82, 0.12)",
           }}>
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
               <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"
                 stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
             </svg>
           </div>
-          <div style={{ fontSize: 22, fontWeight: 800, color: text, letterSpacing: "-0.03em" }}>Cerebro Personal</div>
-          <div style={{ fontSize: 13, color: textSub, marginTop: 4 }}>
+          <div style={{ 
+            fontSize: 26, 
+            fontWeight: 850, 
+            color: text, 
+            letterSpacing: "-0.03em", 
+            fontFamily: "Outfit, sans-serif",
+            lineHeight: 1.15
+          }}>
+            Cerebro Personal
+          </div>
+          <div style={{ fontSize: 13, color: textSub, marginTop: 6, fontWeight: 500 }}>
             {mode === "login" ? "Inicia sesión para continuar" : "Crea tu cuenta"}
           </div>
         </div>
 
-        {/* Card */}
-        <div style={{
-          background: surface, borderRadius: 18, padding: "28px 28px 24px",
+        {/* Card de Acceso Premium */}
+        <div className="login-card" style={{
+          background: surface, 
+          borderRadius: 20, 
+          padding: "32px 32px 28px",
           border: `1px solid ${border}`,
+          backdropFilter: "blur(24px)",
+          WebkitBackdropFilter: "blur(24px)",
           boxShadow: darkMode
-            ? "0 20px 60px rgba(0,0,0,0.5)"
-            : "0 8px 40px rgba(0,0,0,0.10)",
+            ? "0 24px 60px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.06)"
+            : "0 12px 40px rgba(31, 58, 82, 0.06), 0 1px 2px rgba(31, 58, 82, 0.02)",
         }}>
 
-          {/* Toggle login/registro */}
-          <div style={{ display: "flex", gap: 4, marginBottom: 24, background: darkMode ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.04)", borderRadius: 10, padding: 3 }}>
+          {/* Toggle login/registro de cristal */}
+          <div style={{ 
+            display: "flex", 
+            gap: 4, 
+            marginBottom: 24, 
+            background: darkMode ? "rgba(255,255,255,0.05)" : "rgba(31, 58, 82, 0.04)", 
+            borderRadius: 10, 
+            padding: 3 
+          }}>
             {["login", "registro"].map(m => (
               <button key={m} onClick={() => { setMode(m); setError(null); setSuccess(null); setNombre(""); setPassword(""); }}
                 style={{
                   flex: 1, padding: "7px 0", borderRadius: 8, border: "none", cursor: "pointer",
-                  fontSize: 13, fontWeight: mode === m ? 700 : 400,
-                  background: mode === m ? (darkMode ? "#2a2a38" : "#ffffff") : "transparent",
+                  fontSize: 12.5, fontWeight: mode === m ? 700 : 500,
+                  background: mode === m ? (darkMode ? "rgba(255,255,255,0.08)" : "#ffffff") : "transparent",
                   color: mode === m ? text : textSub,
-                  boxShadow: mode === m ? "0 1px 4px rgba(0,0,0,0.12)" : "none",
-                  transition: "all 0.15s",
+                  boxShadow: mode === m ? (darkMode ? "0 1px 4px rgba(0,0,0,0.3)" : "0 1px 4px rgba(31,58,82,0.08)") : "none",
+                  outline: "none",
+                  fontFamily: "Inter, sans-serif",
                 }}>
                 {m === "login" ? "Iniciar sesión" : "Registrarse"}
               </button>
@@ -136,8 +228,12 @@ export default function AuthScreen({ onAuth, darkMode }) {
                 <input
                   type="text" value={nombre}
                   onChange={e => setNombre(e.target.value)}
-                  placeholder="Tu nombre"
-                  style={{ ...inputStyle, border: `1px solid ${focusedField === "nombre" ? accent : border}` }}
+                  placeholder="Tu nombre completo"
+                  style={{ 
+                    ...inputStyle, 
+                    borderColor: focusedField === "nombre" ? accent : border,
+                    boxShadow: focusedField === "nombre" ? (darkMode ? "0 0 0 3.5px rgba(59, 130, 246, 0.16)" : "0 0 0 3.5px rgba(31, 58, 82, 0.08)") : "none" 
+                  }}
                   onFocus={() => setFocusedField("nombre")}
                   onBlur={() => setFocusedField(null)}
                 />
@@ -151,14 +247,18 @@ export default function AuthScreen({ onAuth, darkMode }) {
                 type="email" value={email} required
                 onChange={e => setEmail(e.target.value)}
                 placeholder="tu@email.com"
-                style={{ ...inputStyle, border: `1px solid ${focusedField === "email" ? accent : border}` }}
+                style={{ 
+                  ...inputStyle, 
+                  borderColor: focusedField === "email" ? accent : border,
+                  boxShadow: focusedField === "email" ? (darkMode ? "0 0 0 3.5px rgba(59, 130, 246, 0.16)" : "0 0 0 3.5px rgba(31, 58, 82, 0.08)") : "none" 
+                }}
                 onFocus={() => setFocusedField("email")}
                 onBlur={() => setFocusedField(null)}
               />
             </div>
 
             {/* Contraseña */}
-            <div style={{ marginBottom: 22 }}>
+            <div style={{ marginBottom: 24 }}>
               <label style={labelStyle}>Contraseña</label>
               <div style={{ position: "relative" }}>
                 <input
@@ -166,18 +266,25 @@ export default function AuthScreen({ onAuth, darkMode }) {
                   value={password} required minLength={6}
                   onChange={e => setPassword(e.target.value)}
                   placeholder="••••••••"
-                  style={{ ...inputStyle, paddingRight: 44, border: `1px solid ${focusedField === "password" ? accent : border}` }}
+                  style={{ 
+                    ...inputStyle, 
+                    paddingRight: 44, 
+                    borderColor: focusedField === "password" ? accent : border,
+                    boxShadow: focusedField === "password" ? (darkMode ? "0 0 0 3.5px rgba(59, 130, 246, 0.16)" : "0 0 0 3.5px rgba(31, 58, 82, 0.08)") : "none" 
+                  }}
                   onFocus={() => setFocusedField("password")}
                   onBlur={() => setFocusedField(null)}
                 />
                 <button type="button" onClick={() => setShowPass(!showPass)}
                   style={{
                     position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)",
-                    background: "none", border: "none", cursor: "pointer", color: textSub, padding: 0,
+                    background: "none", border: "none", cursor: "pointer", color: textSub, padding: 4,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    outline: "none",
                   }}>
                   {showPass
-                    ? <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
-                    : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                    ? <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                    : <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
                   }
                 </button>
               </div>
@@ -186,9 +293,11 @@ export default function AuthScreen({ onAuth, darkMode }) {
             {/* Error inline */}
             {error && (
               <div style={{
-                background: "rgba(255,59,48,0.10)", border: "1px solid rgba(255,59,48,0.25)",
-                borderRadius: 8, padding: "9px 12px", marginBottom: 16,
-                fontSize: 13, color: "#ff3b30",
+                background: darkMode ? "rgba(239, 68, 68, 0.12)" : "rgba(239, 68, 68, 0.06)", 
+                border: `1px solid ${darkMode ? "rgba(239, 68, 68, 0.25)" : "rgba(239, 68, 68, 0.15)"}`,
+                borderRadius: 10, padding: "10px 14px", marginBottom: 18,
+                fontSize: 13, color: darkMode ? "#f87171" : "#b91c1c",
+                fontWeight: 500, fontFamily: "Inter, sans-serif"
               }}>
                 {error}
               </div>
@@ -197,9 +306,11 @@ export default function AuthScreen({ onAuth, darkMode }) {
             {/* Success inline */}
             {success && (
               <div style={{
-                background: "rgba(52,199,89,0.10)", border: "1px solid rgba(52,199,89,0.25)",
-                borderRadius: 8, padding: "9px 12px", marginBottom: 16,
-                fontSize: 13, color: "#34c759",
+                background: darkMode ? "rgba(16, 185, 129, 0.12)" : "rgba(16, 185, 129, 0.06)", 
+                border: `1px solid ${darkMode ? "rgba(16, 185, 129, 0.25)" : "rgba(16, 185, 129, 0.15)"}`,
+                borderRadius: 10, padding: "10px 14px", marginBottom: 18,
+                fontSize: 13, color: darkMode ? "#34d399" : "#047857",
+                fontWeight: 500, fontFamily: "Inter, sans-serif"
               }}>
                 {success}
               </div>
@@ -208,11 +319,21 @@ export default function AuthScreen({ onAuth, darkMode }) {
             {/* Botón principal */}
             <button type="submit" disabled={loading}
               style={{
-                width: "100%", padding: "11px 0", borderRadius: 10,
-                background: loading ? (darkMode ? "#333" : "#ccc") : accent,
-                color: "#ffffff", border: "none", fontSize: 14, fontWeight: 700,
+                width: "100%", padding: "12px 0", borderRadius: 12,
+                background: loading 
+                  ? (darkMode ? "rgba(255,255,255,0.06)" : "rgba(31,58,82,0.12)") 
+                  : (darkMode ? "linear-gradient(135deg, #2563eb, #1d4ed8)" : "linear-gradient(135deg, #1F3A52, #15293a)"),
+                color: loading ? textSub : "#ffffff", 
+                border: "none", 
+                fontSize: 13.5, 
+                fontWeight: 750,
+                letterSpacing: "-0.01em",
                 cursor: loading ? "not-allowed" : "pointer",
-                transition: "background 0.15s",
+                boxShadow: darkMode 
+                  ? "0 4px 14px rgba(37, 99, 235, 0.25)" 
+                  : "0 4px 14px rgba(31, 58, 82, 0.15)",
+                outline: "none",
+                fontFamily: "Inter, sans-serif"
               }}>
               {loading
                 ? "Cargando..."
@@ -223,9 +344,22 @@ export default function AuthScreen({ onAuth, darkMode }) {
         </div>
 
         {/* Texto de seguridad */}
-        <div style={{ textAlign: "center", marginTop: 18, fontSize: 11, color: textSub, display: "flex", alignItems: "center", justifyContent: "center", gap: 5 }}>
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
-          Tus datos se sincronizan en todos tus dispositivos de forma segura
+        <div style={{ 
+          textAlign: "center", 
+          marginTop: 20, 
+          fontSize: 11, 
+          color: textSub, 
+          display: "flex", 
+          alignItems: "center", 
+          justifyContent: "center", 
+          gap: 6,
+          fontWeight: 500,
+        }}>
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+            <rect x="3" y="11" width="18" height="11" rx="2"/>
+            <path d="M7 11V7a5 5 0 0110 0v4"/>
+          </svg>
+          Sincronización encriptada en tiempo real
         </div>
       </div>
     </div>

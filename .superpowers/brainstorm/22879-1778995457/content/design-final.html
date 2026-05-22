@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cerebro Personal — Diseño Final</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Inter', -apple-system, sans-serif; background: #f0f0f5; color: #1d1d1f; padding: 24px; }
+
+.title { font-size: 18px; font-weight: 700; color: #1d1d1f; margin-bottom: 4px; }
+.subtitle { font-size: 13px; color: #515154; margin-bottom: 20px; }
+
+.app-frame {
+  background: #f5f5f7;
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 8px 40px rgba(0,0,0,0.15);
+  display: flex;
+  height: 580px;
+  max-width: 1000px;
+  margin: 0 auto;
+  border: 1px solid rgba(0,0,0,0.08);
+}
+
+/* SIDEBAR */
+.sidebar {
+  width: 220px;
+  min-width: 220px;
+  background: rgba(255,255,255,0.75);
+  backdrop-filter: blur(20px);
+  border-right: 1px solid rgba(0,0,0,0.07);
+  display: flex;
+  flex-direction: column;
+  padding: 20px 12px;
+}
+.user-badge {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  background: rgba(0,113,227,0.06);
+  border-radius: 10px;
+  margin-bottom: 24px;
+}
+.avatar {
+  width: 34px; height: 34px;
+  background: linear-gradient(135deg, #0071e3, #5e5ce6);
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 700; color: white;
+}
+.user-info { flex: 1; overflow: hidden; }
+.user-name { font-size: 12px; font-weight: 600; color: #1d1d1f; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.user-role { font-size: 10px; color: #86868b; }
+
+.nav-label { font-size: 10px; font-weight: 600; color: #86868b; letter-spacing: 0.06em; text-transform: uppercase; padding: 0 8px; margin-bottom: 6px; }
+.nav-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  font-size: 13px; font-weight: 500; color: #515154;
+  margin-bottom: 2px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.nav-item:hover { background: rgba(0,0,0,0.04); }
+.nav-item.active { background: rgba(0,113,227,0.08); color: #0071e3; font-weight: 600; }
+.nav-icon { font-size: 15px; width: 20px; text-align: center; }
+.nav-badge { margin-left: auto; background: #0071e3; color: white; border-radius: 10px; padding: 1px 7px; font-size: 10px; font-weight: 700; }
+
+.sidebar-footer { margin-top: auto; }
+.api-status {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px;
+  background: rgba(52,199,89,0.08);
+  border-radius: 8px;
+  font-size: 11px; color: #34c759; font-weight: 600;
+}
+.status-dot { width: 7px; height: 7px; background: #34c759; border-radius: 50%; }
+
+/* MAIN */
+.main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* TOPBAR */
+.topbar {
+  padding: 14px 20px 10px;
+  border-bottom: 1px solid rgba(0,0,0,0.06);
+  display: flex; align-items: center; justify-content: space-between;
+  background: rgba(255,255,255,0.6);
+  backdrop-filter: blur(10px);
+}
+.greeting { font-size: 16px; font-weight: 700; color: #1d1d1f; }
+.topbar-meta { font-size: 12px; color: #86868b; }
+.focus-chip {
+  display: flex; align-items: center; gap: 6px;
+  background: rgba(0,113,227,0.08);
+  border: 1px solid rgba(0,113,227,0.15);
+  border-radius: 20px; padding: 4px 12px;
+  font-size: 11px; font-weight: 600; color: #0071e3;
+}
+
+/* CHAT AREA */
+.chat-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 16px 20px 0;
+}
+.chat-messages {
+  flex: 1; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 10px;
+  padding-bottom: 8px;
+}
+.msg { display: flex; gap: 10px; align-items: flex-start; max-width: 85%; }
+.msg.user { align-self: flex-end; flex-direction: row-reverse; }
+.msg-bubble {
+  padding: 9px 13px;
+  border-radius: 14px;
+  font-size: 12.5px; line-height: 1.5;
+}
+.msg.ai .msg-bubble { background: white; box-shadow: 0 1px 4px rgba(0,0,0,0.08); color: #1d1d1f; border-radius: 4px 14px 14px 14px; }
+.msg.user .msg-bubble { background: #0071e3; color: white; border-radius: 14px 4px 14px 14px; }
+.msg-orb {
+  width: 28px; height: 28px; min-width: 28px;
+  background: radial-gradient(circle at 35% 35%, #a78bfa, #0071e3 60%, #5e5ce6);
+  border-radius: 50%;
+  box-shadow: 0 2px 8px rgba(0,113,227,0.25);
+}
+.msg-action {
+  display: inline-flex; align-items: center; gap: 5px;
+  margin-top: 6px;
+  padding: 4px 10px;
+  background: rgba(0,113,227,0.08);
+  border: 1px solid rgba(0,113,227,0.15);
+  border-radius: 20px;
+  font-size: 11px; font-weight: 600; color: #0071e3;
+  cursor: pointer;
+}
+
+/* CAPTURE BAR */
+.capture-wrap { padding: 12px 20px 14px; border-top: 1px solid rgba(0,0,0,0.06); background: rgba(255,255,255,0.7); backdrop-filter: blur(10px); }
+.capture-bar {
+  display: flex; align-items: center; gap: 10px;
+  background: white; border: 1px solid rgba(0,0,0,0.1);
+  border-radius: 14px; padding: 10px 14px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+}
+.capture-input { flex: 1; border: none; outline: none; font-size: 13px; color: #1d1d1f; background: transparent; }
+.mic-btn { width: 28px; height: 28px; background: rgba(0,113,227,0.1); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; cursor: pointer; }
+.send-btn { width: 28px; height: 28px; background: #0071e3; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 12px; cursor: pointer; }
+
+/* WIDGETS */
+.widgets-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 10px;
+  padding: 12px 20px;
+  background: rgba(245,245,247,0.8);
+  border-top: 1px solid rgba(0,0,0,0.05);
+}
+.widget {
+  background: white;
+  border-radius: 12px;
+  padding: 12px 14px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+}
+.widget-label { font-size: 10px; font-weight: 600; color: #86868b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
+.widget-value { font-size: 20px; font-weight: 700; color: #1d1d1f; }
+.widget-sub { font-size: 11px; color: #86868b; margin-top: 2px; }
+.widget-tag { display: inline-block; font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 10px; margin-top: 4px; }
+.tag-green { background: rgba(52,199,89,0.1); color: #34c759; }
+.tag-amber { background: rgba(255,149,0,0.1); color: #ff9500; }
+.tag-blue { background: rgba(0,113,227,0.1); color: #0071e3; }
+
+/* ANNOTATION */
+.annotation {
+  max-width: 1000px; margin: 16px auto 0;
+  display: grid; grid-template-columns: 1fr 1fr 1fr;
+  gap: 12px;
+}
+.ann-item { background: white; border-radius: 10px; padding: 12px 14px; box-shadow: 0 1px 4px rgba(0,0,0,0.06); }
+.ann-title { font-size: 12px; font-weight: 700; color: #1d1d1f; margin-bottom: 4px; }
+.ann-desc { font-size: 11px; color: #515154; line-height: 1.5; }
+</style>
+</head>
+<body>
+
+<p class="title">Cerebro Personal — Diseño Propuesto</p>
+<p class="subtitle">Layout A: IA en el centro. Aprueba o pide ajustes antes de implementar.</p>
+
+<div class="app-frame">
+
+  <!-- SIDEBAR -->
+  <aside class="sidebar">
+    <div class="user-badge">
+      <div class="avatar">JO</div>
+      <div class="user-info">
+        <div class="user-name">Ing. Javier Ospina</div>
+        <div class="user-role">Director de Proyectos</div>
+      </div>
+    </div>
+
+    <div class="nav-label" style="margin-bottom: 8px;">Espacios</div>
+    <div class="nav-item active"><span class="nav-icon">⌂</span> Inicio</div>
+    <div class="nav-item"><span class="nav-icon">✓</span> Tareas <span class="nav-badge">3</span></div>
+    <div class="nav-item"><span class="nav-icon">✏</span> Notas & Diario</div>
+    <div class="nav-item"><span class="nav-icon">$</span> Finanzas</div>
+
+    <div style="height: 1px; background: rgba(0,0,0,0.06); margin: 14px 0;"></div>
+    <div class="nav-label" style="margin-bottom: 8px;">Asistente</div>
+    <div class="nav-item"><span class="nav-icon">🔗</span> Conexiones</div>
+    <div class="nav-item"><span class="nav-icon">⚙</span> Configuración</div>
+
+    <div class="sidebar-footer">
+      <div class="api-status">
+        <div class="status-dot"></div>
+        IA Activa · Gemini 2.0
+      </div>
+    </div>
+  </aside>
+
+  <!-- MAIN CONTENT -->
+  <main class="main">
+
+    <!-- TOPBAR -->
+    <div class="topbar">
+      <div>
+        <div class="greeting">Buenos días, Javier ☀️</div>
+        <div class="topbar-meta">Domingo, 17 de mayo · Bogotá 18°C</div>
+      </div>
+      <div class="focus-chip">⚡ Enfocado</div>
+    </div>
+
+    <!-- CHAT -->
+    <div class="chat-area">
+      <div class="chat-messages">
+        <div class="msg ai">
+          <div class="msg-orb"></div>
+          <div>
+            <div class="msg-bubble">Hola Javier, hoy tienes <strong>3 tareas pendientes</strong> y llevas $180k gastados este mes. ¿En qué te ayudo?</div>
+          </div>
+        </div>
+        <div class="msg user">
+          <div class="msg-bubble">Agrega una tarea: revisar el presupuesto de la bodega Bacca para el miércoles</div>
+        </div>
+        <div class="msg ai">
+          <div class="msg-orb"></div>
+          <div>
+            <div class="msg-bubble">✓ Tarea creada: <strong>"Revisar presupuesto bodega Bacca"</strong> — vence el miércoles 21 de mayo.</div>
+            <div class="msg-action">📋 Ver en Tareas</div>
+          </div>
+        </div>
+        <div class="msg user">
+          <div class="msg-bubble">Gasté $45.000 en almuerzo hoy</div>
+        </div>
+        <div class="msg ai">
+          <div class="msg-orb"></div>
+          <div>
+            <div class="msg-bubble">Registrado. <strong>$45.000</strong> en categoría Alimentación — 17 may. Tu total del mes sube a $225.000.</div>
+            <div class="msg-action">💰 Ver en Finanzas</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="capture-wrap">
+        <div class="capture-bar">
+          <span style="font-size:14px;">🤖</span>
+          <input class="capture-input" placeholder="Escribe o habla — tarea, gasto, nota, pregunta..." readonly>
+          <div class="mic-btn">🎙</div>
+          <div class="send-btn">↑</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- WIDGETS -->
+    <div class="widgets-row">
+      <div class="widget">
+        <div class="widget-label">Tareas del día</div>
+        <div class="widget-value">3</div>
+        <div class="widget-sub">pendientes hoy</div>
+        <span class="widget-tag tag-amber">1 urgente</span>
+      </div>
+      <div class="widget">
+        <div class="widget-label">Gastos del mes</div>
+        <div class="widget-value">$225k</div>
+        <div class="widget-sub">de $600k presupuestado</div>
+        <span class="widget-tag tag-green">37% usado</span>
+      </div>
+      <div class="widget">
+        <div class="widget-label">Última nota</div>
+        <div class="widget-value" style="font-size:13px; font-weight:500; line-height:1.4; margin-top:2px;">"Revisar cálculo de losa banco..."</div>
+        <div class="widget-sub">hace 2 horas</div>
+        <span class="widget-tag tag-blue">Ver nota</span>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<!-- ANNOTATIONS -->
+<div class="annotation">
+  <div class="ann-item">
+    <div class="ann-title">🤖 IA como control central</div>
+    <div class="ann-desc">Escribe en lenguaje natural: "agrega tarea X", "gasté $Y en Z", "anota esto". La IA detecta la intención y actúa — no necesitas navegar a ninguna sección.</div>
+  </div>
+  <div class="ann-item">
+    <div class="ann-title">📋 Sidebar limpio</div>
+    <div class="ann-desc">4 secciones principales + configuración. Sin nombres metafóricos. Acceso directo a Tareas, Notas y Finanzas cuando quieres ver el detalle completo.</div>
+  </div>
+  <div class="ann-item">
+    <div class="ann-title">📊 3 Widgets de contexto</div>
+    <div class="ann-desc">Tareas del día, Gastos del mes y Última nota — siempre visibles sin ocupar espacio. La IA los actualiza en tiempo real cuando crea o registra algo.</div>
+  </div>
+</div>
+
+</body>
+</html>
